@@ -70,6 +70,8 @@ function teardown() {
   # Kill can send non-TERM/KILL signal to container to exit
   run podman kill --signal SIGINT $A_CNT
   run_podman ps --filter name=$A_CNT --format '{{.Status}}'
+  # TBD : container doesn't exit by the signal specified with
+  #       "podman run --stop-signal <non-TERM/KILL signal>
   dprint "$A_CNT (SIGINT) : $output"
 
   run_podman kill --signal SIGKILL $A_CNT 2>&1
