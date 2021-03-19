@@ -45,12 +45,16 @@ function teardown() {
 
   # Export built container as tarball
   run_podman export -o $PODMAN_TMPDIR/$B_CNT.tar $B_CNT
+  run_podman rm -fa
 
   DATE=$(date -u "+%a %b %d %R")
   # Modify tarball contents
   # Import tarball
-  run_podman import -q --change "CMD /bin/date;/bin/sleep 30" \
-             $PODMAN_TMPDIR/$B_CNT.tar
+
+  cmd="date;/bin/sh -c \"trap 'exit 33' 2;while true;do sleep 1;done\""
+  run_podman import -q \
+      --change "CMD $cmd" \
+       $PODMAN_TMPDIR/$B_CNT.tar
   IID=$output
 
   # Tag imported image
@@ -58,28 +62,19 @@ function teardown() {
   
   # Run imported image to confirm tarball modification, block on non-special signal
   touch $PODMAN_TMPDIR/testlog
-  run_podman run --name $A_CNT -d --stop-signal SIGINT --log-driver=k8s-file \
+  run_podman run --name $A_CNT -d --log-driver=k8s-file \
              --log-opt="path=$PODMAN_TMPDIR/testlog" $A_IMG 
-
-  run cat $PODMAN_TMPDIR/testlog
-  is "$output" ".*${DATE}" "change image"
   
-  run_podman ps --format '{{.Status}}'
-  is "$output" "^Up" "Confirm container Up"
-
+  run cat $PODMAN_TMPDIR/testlog
+  is "$output" ".*${DATE}" "Confirm change image by checking CMD output"
+  
   # Kill can send non-TERM/KILL signal to container to exit
-  run podman kill --signal SIGINT $A_CNT
-  run_podman ps --filter name=$A_CNT --format '{{.Status}}'
-  # TBD : container doesn't exit by the signal specified with
-  #       "podman run --stop-signal <non-TERM/KILL signal>
-  dprint "$A_CNT (SIGINT) : $output"
-
-  run_podman kill --signal SIGKILL $A_CNT 2>&1
+  run_podman kill --signal 2 $A_CNT 
+  sleep 10
  
   # Confirm exit within timeout
   run_podman ps -a --filter name=$A_CNT --format '{{.Status}}'
-  dprint " $A_CNT (SIGKILL): $output"
-  is "$output" "Exited (137)" "Exit by SIGKILL"
+  is "$output" "Exited (33)" "Exit by non-TERM/KILL"
   
   run_podman rmi -fa
 
