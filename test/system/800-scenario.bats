@@ -5,75 +5,63 @@
 
 load helpers
 
-ALPINE="quay.io/libpod/alpine"
+alpine="quay.io/libpod/alpine"
 
-function setup() {
-
-  basic_setup
+@test "Implied pull, build, export, modify, import, tag, run, kill" {
 
   # Create a test file following test
   echo "Import TEST" >> $PODMAN_TMPDIR/testfile
 
   # Create Dockerfile for test
-  DOCKERFILE=$PODMAN_TMPDIR/Dockerfile
+  dockerfile=$PODMAN_TMPDIR/Dockerfile
 
-  cat >$DOCKERFILE <<EOF
-FROM $ALPINE
+  cat >$dockerfile <<EOF
+FROM $alpine
 ADD testfile /tmp
 WORKDIR /tmp
 CMD cat testfile
 EOF
-}
 
-function teardown() {
-
-  basic_teardown
-  rm -rf $PODMAN_TMPDIR
-
-}
-
-@test "podman import changed tarball" {
-
-  B_IMG=before_change_img
-  B_CNT=before_change_cnt
-  A_IMG=after_change_img
-  A_CNT=after_change_cnt
+  b_img=before_change_img
+  b_cnt=before_change_cnt
+  a_img=after_change_img
+  a_cnt=after_change_cnt
 
   # Build from Dockerfile FROM non-existing local image
-  run_podman build -t $B_IMG $PODMAN_TMPDIR
-  run_podman run -d --name $B_CNT $B_IMG sleep 300
+  run_podman build -t $b_img $PODMAN_TMPDIR
+  run_podman run -d --name $b_cnt $b_img sleep 300
 
   # Export built container as tarball
-  run_podman export -o $PODMAN_TMPDIR/$B_CNT.tar $B_CNT
+  run_podman export -o $PODMAN_TMPDIR/$b_cnt.tar $b_cnt
   run_podman rm -fa
 
-  DATE=$(date -u "+%a %b %d %R")
+  date=$(date -u "+%a %b %d %R")
   # Modify tarball contents
   # Import tarball
 
   cmd="date;/bin/sh -c \"trap 'exit 33' 2;while true;do sleep 1;done\""
   run_podman import -q \
       --change "CMD $cmd" \
-       $PODMAN_TMPDIR/$B_CNT.tar
-  IID=$output
+       $PODMAN_TMPDIR/$b_cnt.tar
+  iid=$output
 
   # Tag imported image
-  run_podman tag $IID $A_IMG
+  run_podman tag $iid $a_img
   
   # Run imported image to confirm tarball modification, block on non-special signal
   touch $PODMAN_TMPDIR/testlog
-  run_podman run --name $A_CNT -d --log-driver=k8s-file \
-             --log-opt="path=$PODMAN_TMPDIR/testlog" $A_IMG 
+  run_podman run --name $a_cnt -d --log-driver=k8s-file \
+             --log-opt="path=$PODMAN_TMPDIR/testlog" $a_img 
   
   run cat $PODMAN_TMPDIR/testlog
-  is "$output" ".*${DATE}" "Confirm change image by checking CMD output"
+  is "$output" ".*${date}" "Confirm change image by checking CMD output"
   
   # Kill can send non-TERM/KILL signal to container to exit
-  run_podman kill --signal 2 $A_CNT 
+  run_podman kill --signal 2 $a_cnt 
   sleep 10
  
   # Confirm exit within timeout
-  run_podman ps -a --filter name=$A_CNT --format '{{.Status}}'
+  run_podman ps -a --filter name=$a_cnt --format '{{.Status}}'
   is "$output" "Exited (33)" "Exit by non-TERM/KILL"
   
   run_podman rmi -fa
