@@ -28,7 +28,7 @@ alpine="quay.io/libpod/alpine"
   cat >$dockerfile <<EOF
 FROM $alpine
 ADD testfile1 /tmp
-ADD prevent-error-tarball /tmp
+#ADD prevent-error-tarball /tmp
 WORKDIR /tmp
 EOF
 
