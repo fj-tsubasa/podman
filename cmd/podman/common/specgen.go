@@ -516,7 +516,6 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *ContainerCLIOpts, args []string
 			if len(con) != 2 {
 				return fmt.Errorf("invalid --security-opt 1: %q", opt)
 			}
-
 			switch con[0] {
 			case "apparmor":
 				s.ContainerSecurityConfig.ApparmorProfile = con[1]
@@ -564,6 +563,14 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *ContainerCLIOpts, args []string
 
 	for _, dev := range c.Devices {
 		s.Devices = append(s.Devices, specs.LinuxDevice{Path: dev})
+	}
+
+	for _, rule := range c.DeviceCGroupRule {
+		dev, err := parseLinuxResourcesDeviceAccess(rule)
+		if err != nil {
+			return err
+		}
+		s.DeviceCGroupRule = append(s.DeviceCGroupRule, dev)
 	}
 
 	s.Init = c.Init
@@ -644,6 +651,12 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *ContainerCLIOpts, args []string
 	if err != nil {
 		return err
 	}
+
+	if c.Personality != "" {
+		s.Personality = &specs.LinuxPersonality{}
+		s.Personality.Domain = specs.LinuxPersonalityDomain(c.Personality)
+	}
+
 	s.Remove = c.Rm
 	s.StopTimeout = &c.StopTimeout
 	s.Timeout = c.Timeout
@@ -652,29 +665,46 @@ func FillOutSpecGen(s *specgen.SpecGenerator, c *ContainerCLIOpts, args []string
 	s.PidFile = c.PidFile
 	s.Volatile = c.Rm
 
+	// Initcontainers
+	s.InitContainerType = c.InitContainerType
 	return nil
 }
 
 func makeHealthCheckFromCli(inCmd, interval string, retries uint, timeout, startPeriod string) (*manifest.Schema2HealthConfig, error) {
+	cmdArr := []string{}
+	isArr := true
+	err := json.Unmarshal([]byte(inCmd), &cmdArr) // array unmarshalling
+	if err != nil {
+		cmdArr = strings.SplitN(inCmd, " ", 2) // default for compat
+		isArr = false
+	}
 	// Every healthcheck requires a command
-	if len(inCmd) == 0 {
+	if len(cmdArr) == 0 {
 		return nil, errors.New("Must define a healthcheck command for all healthchecks")
 	}
-
-	// first try to parse option value as JSON array of strings...
-	cmd := []string{}
-
-	if inCmd == "none" {
-		cmd = []string{"NONE"}
-	} else {
-		err := json.Unmarshal([]byte(inCmd), &cmd)
-		if err != nil {
-			// ...otherwise pass it to "/bin/sh -c" inside the container
-			cmd = []string{"CMD-SHELL", inCmd}
+	concat := ""
+	if cmdArr[0] == "CMD" || cmdArr[0] == "none" { // this is for compat, we are already split properly for most compat cases
+		cmdArr = strings.Fields(inCmd)
+	} else if cmdArr[0] != "CMD-SHELL" { // this is for podman side of things, won't contain the keywords
+		if isArr && len(cmdArr) > 1 { // an array of consecutive commands
+			cmdArr = append([]string{"CMD"}, cmdArr...)
+		} else { // one singular command
+			if len(cmdArr) == 1 {
+				concat = cmdArr[0]
+			} else {
+				concat = strings.Join(cmdArr[0:], " ")
+			}
+			cmdArr = append([]string{"CMD-SHELL"}, concat)
 		}
 	}
+
+	if cmdArr[0] == "none" { // if specified to remove healtcheck
+		cmdArr = []string{"NONE"}
+	}
+
+	// healthcheck is by default an array, so we simply pass the user input
 	hc := manifest.Schema2HealthConfig{
-		Test: cmd,
+		Test: cmdArr,
 	}
 
 	if interval == "disable" {
@@ -884,4 +914,59 @@ func parseSecrets(secrets []string) ([]specgen.Secret, map[string]string, error)
 		}
 	}
 	return mount, envs, nil
+}
+
+var cgroupDeviceType = map[string]bool{
+	"a": true, // all
+	"b": true, // block device
+	"c": true, // character device
+}
+
+var cgroupDeviceAccess = map[string]bool{
+	"r": true, //read
+	"w": true, //write
+	"m": true, //mknod
+}
+
+// parseLinuxResourcesDeviceAccess parses the raw string passed with the --device-access-add flag
+func parseLinuxResourcesDeviceAccess(device string) (specs.LinuxDeviceCgroup, error) {
+	var devType, access string
+	var major, minor *int64
+
+	value := strings.Split(device, " ")
+	if len(value) != 3 {
+		return specs.LinuxDeviceCgroup{}, fmt.Errorf("invalid device cgroup rule requires type, major:Minor, and access rules: %q", device)
+	}
+
+	devType = value[0]
+	if !cgroupDeviceType[devType] {
+		return specs.LinuxDeviceCgroup{}, fmt.Errorf("invalid device type in device-access-add: %s", devType)
+	}
+
+	number := strings.SplitN(value[1], ":", 2)
+	i, err := strconv.ParseInt(number[0], 10, 64)
+	if err != nil {
+		return specs.LinuxDeviceCgroup{}, err
+	}
+	major = &i
+	if len(number) == 2 && number[1] != "*" {
+		i, err := strconv.ParseInt(number[1], 10, 64)
+		if err != nil {
+			return specs.LinuxDeviceCgroup{}, err
+		}
+		minor = &i
+	}
+	access = value[2]
+	for _, c := range strings.Split(access, "") {
+		if !cgroupDeviceAccess[c] {
+			return specs.LinuxDeviceCgroup{}, fmt.Errorf("invalid device access in device-access-add: %s", c)
+		}
+	}
+	return specs.LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   devType,
+		Major:  major,
+		Minor:  minor,
+		Access: access,
+	}, nil
 }

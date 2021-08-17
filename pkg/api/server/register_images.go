@@ -962,6 +962,15 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     description: "Mandatory reference to the image (e.g., quay.io/image/name:tag)"
 	//     type: string
 	//   - in: query
+	//     name: quiet
+	//     description: "silences extra stream data on pull"
+	//     type: boolean
+	//     default: false
+	//   - in: query
+	//     name: credentials
+	//     description: "username:password for the registry"
+	//     type: string
+	//   - in: query
 	//     name: Arch
 	//     description: Pull image for the specified architecture.
 	//     type: string
@@ -972,6 +981,10 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//   - in: query
 	//     name: Variant
 	//     description: Pull image for the specified variant.
+	//     type: string
+	//   - in: query
+	//     name: policy
+	//     description: Pull policy, "always" (default), "missing", "newer", "never".
 	//     type: string
 	//   - in: query
 	//     name: tlsVerify
@@ -1282,7 +1295,16 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    name: name
 	//    type: string
 	//    required: true
-	//    description: the name or id of the container
+	//    description: the name or id of the image
+	//  - in: query
+	//    name: parent
+	//    type: string
+	//    description: specify a second layer which is used to compare against it instead of the parent layer
+	//  - in: query
+	//    name: diffType
+	//    type: string
+	//    enum: [all, container, image]
+	//    description: select what you want to match, default is all
 	// responses:
 	//   200:
 	//     description: Array of Changes

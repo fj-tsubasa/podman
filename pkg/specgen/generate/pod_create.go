@@ -27,11 +27,16 @@ func createPodOptions(p *specgen.PodSpecGenerator, rt *libpod.Runtime) ([]libpod
 	)
 	if !p.NoInfra {
 		options = append(options, libpod.WithInfraContainer())
-		nsOptions, err := GetNamespaceOptions(p.SharedNamespaces)
+		nsOptions, err := GetNamespaceOptions(p.SharedNamespaces, p.NetNS.IsHost())
 		if err != nil {
 			return nil, err
 		}
 		options = append(options, nsOptions...)
+		// Use pod user and infra userns only when --userns is not set to host
+		if !p.Userns.IsHost() {
+			options = append(options, libpod.WithPodUser())
+			options = append(options, libpod.WithPodUserns(p.Userns))
+		}
 
 		// Make our exit command
 		storageConfig := rt.StorageConfig()
@@ -53,6 +58,14 @@ func createPodOptions(p *specgen.PodSpecGenerator, rt *libpod.Runtime) ([]libpod
 	}
 	if len(p.Name) > 0 {
 		options = append(options, libpod.WithPodName(p.Name))
+	}
+	if p.ResourceLimits != nil && p.ResourceLimits.CPU != nil && p.ResourceLimits.CPU.Period != nil && p.ResourceLimits.CPU.Quota != nil {
+		if *p.ResourceLimits.CPU.Period != 0 || *p.ResourceLimits.CPU.Quota != 0 {
+			options = append(options, libpod.WithPodCPUPAQ((*p.ResourceLimits.CPU.Period), (*p.ResourceLimits.CPU.Quota)))
+		}
+	}
+	if p.ResourceLimits != nil && p.ResourceLimits.CPU != nil && p.ResourceLimits.CPU.Cpus != "" {
+		options = append(options, libpod.WithPodCPUSetCPUs(p.ResourceLimits.CPU.Cpus))
 	}
 	if len(p.Hostname) > 0 {
 		options = append(options, libpod.WithPodHostname(p.Hostname))
@@ -90,8 +103,16 @@ func createPodOptions(p *specgen.PodSpecGenerator, rt *libpod.Runtime) ([]libpod
 		options = append(options, libpod.WithInfraImage(p.InfraImage))
 	}
 
+	if len(p.InfraName) > 0 {
+		options = append(options, libpod.WithInfraName(p.InfraName))
+	}
+
 	if len(p.InfraCommand) > 0 {
 		options = append(options, libpod.WithInfraCommand(p.InfraCommand))
+	}
+
+	if !p.Pid.IsDefault() {
+		options = append(options, libpod.WithPodPidNS(p.Pid))
 	}
 
 	switch p.NetNS.NSMode {
@@ -138,5 +159,6 @@ func createPodOptions(p *specgen.PodSpecGenerator, rt *libpod.Runtime) ([]libpod
 	if len(p.InfraConmonPidFile) > 0 {
 		options = append(options, libpod.WithInfraConmonPidFile(p.InfraConmonPidFile))
 	}
+
 	return options, nil
 }

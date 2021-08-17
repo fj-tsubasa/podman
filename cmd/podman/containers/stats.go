@@ -5,6 +5,7 @@ import (
 	"os"
 
 	tm "github.com/buger/goterm"
+	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
 	"github.com/containers/podman/v3/cmd/podman/common"
 	"github.com/containers/podman/v3/cmd/podman/registry"
@@ -16,7 +17,6 @@ import (
 	"github.com/containers/podman/v3/utils"
 	"github.com/docker/go-units"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -55,6 +55,7 @@ type statsOptionsCLI struct {
 	Latest   bool
 	NoReset  bool
 	NoStream bool
+	Interval int
 }
 
 var (
@@ -72,6 +73,9 @@ func statFlags(cmd *cobra.Command) {
 
 	flags.BoolVar(&statsOptions.NoReset, "no-reset", false, "Disable resetting the screen between intervals")
 	flags.BoolVar(&statsOptions.NoStream, "no-stream", false, "Disable streaming stats and only pull the first result, default setting is false")
+	intervalFlagName := "interval"
+	flags.IntVarP(&statsOptions.Interval, intervalFlagName, "i", 5, "Time in seconds between stats reports")
+	_ = cmd.RegisterFlagCompletionFunc(intervalFlagName, completion.AutocompleteNone)
 }
 
 func init() {
@@ -122,8 +126,9 @@ func stats(cmd *cobra.Command, args []string) error {
 	// Convert to the entities options.  We should not leak CLI-only
 	// options into the backend and separate concerns.
 	opts := entities.ContainerStatsOptions{
-		Latest: statsOptions.Latest,
-		Stream: !statsOptions.NoStream,
+		Latest:   statsOptions.Latest,
+		Stream:   !statsOptions.NoStream,
+		Interval: statsOptions.Interval,
 	}
 	statsChan, err := registry.ContainerEngine().ContainerStats(registry.Context(), args, opts)
 	if err != nil {
@@ -134,7 +139,7 @@ func stats(cmd *cobra.Command, args []string) error {
 			return report.Error
 		}
 		if err := outputStats(report.Stats); err != nil {
-			logrus.Error(err)
+			return err
 		}
 	}
 	return nil
@@ -143,7 +148,9 @@ func stats(cmd *cobra.Command, args []string) error {
 func outputStats(reports []define.ContainerStats) error {
 	headers := report.Headers(define.ContainerStats{}, map[string]string{
 		"ID":            "ID",
+		"UpTime":        "CPU TIME",
 		"CPUPerc":       "CPU %",
+		"AVGCPU":        "Avg CPU %",
 		"MemUsage":      "MEM USAGE / LIMIT",
 		"MemUsageBytes": "MEM USAGE / LIMIT",
 		"MemPerc":       "MEM %",
@@ -163,7 +170,7 @@ func outputStats(reports []define.ContainerStats) error {
 	if report.IsJSON(statsOptions.Format) {
 		return outputJSON(stats)
 	}
-	format := "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDS}}\n"
+	format := "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDS}}\t{{.UpTime}}\t{{.AVGCPU}}\n"
 	if len(statsOptions.Format) > 0 {
 		format = report.NormalizeFormat(statsOptions.Format)
 	}
@@ -201,6 +208,14 @@ func (s *containerStats) ID() string {
 
 func (s *containerStats) CPUPerc() string {
 	return floatToPercentString(s.CPU)
+}
+
+func (s *containerStats) AVGCPU() string {
+	return floatToPercentString(s.AvgCPU)
+}
+
+func (s *containerStats) Up() string {
+	return (s.UpTime.String())
 }
 
 func (s *containerStats) MemPerc() string {
@@ -258,7 +273,9 @@ func outputJSON(stats []containerStats) error {
 	type jstat struct {
 		Id         string `json:"id"` // nolint
 		Name       string `json:"name"`
+		CPUTime    string `json:"cpu_time"`
 		CpuPercent string `json:"cpu_percent"` // nolint
+		AverageCPU string `json:"avg_cpu"`
 		MemUsage   string `json:"mem_usage"`
 		MemPerc    string `json:"mem_percent"`
 		NetIO      string `json:"net_io"`
@@ -270,7 +287,9 @@ func outputJSON(stats []containerStats) error {
 		jstats = append(jstats, jstat{
 			Id:         j.ID(),
 			Name:       j.Name,
+			CPUTime:    j.Up(),
 			CpuPercent: j.CPUPerc(),
+			AverageCPU: j.AVGCPU(),
 			MemUsage:   j.MemUsage(),
 			MemPerc:    j.MemPerc(),
 			NetIO:      j.NetIO(),

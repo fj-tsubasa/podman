@@ -27,7 +27,7 @@ func IsRegistryReference(name string) error {
 	if imageRef.Transport().Name() == docker.Transport.Name() {
 		return nil
 	}
-	return errors.Errorf("unsupport transport %s in %q: only docker transport is supported", imageRef.Transport().Name(), name)
+	return errors.Errorf("unsupported transport %s in %q: only docker transport is supported", imageRef.Transport().Name(), name)
 }
 
 // ParseStorageReference parses the specified image name to a
@@ -88,8 +88,7 @@ func GetImages(w http.ResponseWriter, r *http.Request) ([]*libimage.Image, error
 
 func GetImage(r *http.Request, name string) (*libimage.Image, error) {
 	runtime := r.Context().Value("runtime").(*libpod.Runtime)
-	lookupOptions := &libimage.LookupImageOptions{IgnorePlatform: true}
-	image, _, err := runtime.LibimageRuntime().LookupImage(name, lookupOptions)
+	image, _, err := runtime.LibimageRuntime().LookupImage(name, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,9 @@ import (
 
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v3/pkg/namespaces"
 	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v3/pkg/specgen"
 	"github.com/containers/podman/v3/pkg/util"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
@@ -110,9 +112,7 @@ func (r *Runtime) makeInfraContainer(ctx context.Context, p *Pod, imgName, rawIm
 					options = append(options, WithNetworkOptions(p.config.InfraContainer.NetworkOptions))
 				}
 			}
-			// PostConfigureNetNS should not be set since user namespace sharing is not implemented
-			// and rootless networking no longer supports post configuration setup
-			options = append(options, WithNetNS(p.config.InfraContainer.PortBindings, false, netmode, p.config.InfraContainer.Networks))
+			options = append(options, WithNetNS(p.config.InfraContainer.PortBindings, !p.config.InfraContainer.Userns.IsHost(), netmode, p.config.InfraContainer.Networks))
 		}
 
 		// For each option in InfraContainerConfig - if set, pass into
@@ -145,12 +145,51 @@ func (r *Runtime) makeInfraContainer(ctx context.Context, p *Pod, imgName, rawIm
 		if len(p.config.InfraContainer.ExitCommand) > 0 {
 			options = append(options, WithExitCommand(p.config.InfraContainer.ExitCommand))
 		}
+
+		if p.config.UsePodPID && p.config.InfraContainer.PidNS.NSMode != "host" {
+			g.AddOrReplaceLinuxNamespace(string(spec.LinuxNamespaceType("pid")), p.config.InfraContainer.PidNS.Value)
+		} else if p.config.InfraContainer.PidNS.NSMode == "host" {
+			newNS := []spec.LinuxNamespace{}
+			for _, entry := range g.Config.Linux.Namespaces {
+				if entry.Type != spec.LinuxNamespaceType("pid") {
+					newNS = append(newNS, entry)
+				}
+			}
+			g.Config.Linux.Namespaces = newNS
+		}
+	}
+
+	for _, ctl := range r.config.Containers.DefaultSysctls {
+		sysctl := strings.SplitN(ctl, "=", 2)
+		if len(sysctl) < 2 {
+			return nil, errors.Errorf("invalid default sysctl %s", ctl)
+		}
+
+		// Ignore net sysctls if --net=host
+		if p.config.InfraContainer.HostNetwork && strings.HasPrefix(sysctl[0], "net.") {
+			logrus.Infof("Sysctl %s=%s ignored in containers.conf, since Network Namespace set to host", sysctl[0], sysctl[1])
+			continue
+		}
+
+		g.AddLinuxSysctl(sysctl[0], sysctl[1])
 	}
 
 	g.SetRootReadonly(true)
 	g.SetProcessArgs(infraCtrCommand)
 
 	logrus.Debugf("Using %q as infra container command", infraCtrCommand)
+
+	mapopt, err := util.ParseIDMapping(namespaces.UsernsMode(p.config.InfraContainer.Userns.String()), []string{}, []string{}, "", "")
+	if err != nil {
+		return nil, err
+	}
+	user, err := specgen.SetupUserNS(mapopt, p.config.InfraContainer.Userns, &g)
+	if err != nil {
+		return nil, err
+	}
+	if user != "" {
+		options = append(options, WithUser(user))
+	}
 
 	g.RemoveMount("/dev/shm")
 	if isRootless {
@@ -173,7 +212,6 @@ func (r *Runtime) makeInfraContainer(ctx context.Context, p *Pod, imgName, rawIm
 		// Ignore mqueue sysctls if not sharing IPC
 		if !p.config.UsePodIPC && strings.HasPrefix(sysctlKey, "fs.mqueue.") {
 			logrus.Infof("Sysctl %s=%s ignored in containers.conf, since IPC Namespace for pod is unused", sysctlKey, sysctlVal)
-
 			continue
 		}
 
@@ -188,18 +226,26 @@ func (r *Runtime) makeInfraContainer(ctx context.Context, p *Pod, imgName, rawIm
 			logrus.Infof("Sysctl %s=%s ignored in containers.conf, since UTS Namespace for pod is unused", sysctlKey, sysctlVal)
 			continue
 		}
-
 		g.AddLinuxSysctl(sysctlKey, sysctlVal)
 	}
 
-	containerName := p.ID()[:IDTruncLength] + "-infra"
+	containerName := p.config.InfraContainer.InfraName
+	if containerName == "" {
+		containerName = p.ID()[:IDTruncLength] + "-infra"
+	}
+	logrus.Infof("Infra container name %s", containerName)
 	options = append(options, r.WithPod(p))
 	options = append(options, WithRootFSFromImage(imgID, imgName, rawImageName))
 	options = append(options, WithName(containerName))
 	options = append(options, withIsInfra())
+	options = append(options, WithIDMappings(*mapopt))
 	if len(p.config.InfraContainer.ConmonPidFile) > 0 {
 		options = append(options, WithConmonPidFile(p.config.InfraContainer.ConmonPidFile))
 	}
+	newRes := new(spec.LinuxResources)
+	newRes.CPU = new(spec.LinuxCPU)
+	newRes.CPU = p.ResourceLim().CPU
+	g.Config.Linux.Resources.CPU = newRes.CPU
 
 	return r.newContainer(ctx, g.Config, options...)
 }
@@ -211,7 +257,6 @@ func (r *Runtime) createInfraContainer(ctx context.Context, p *Pod) (*Container,
 	if !r.valid {
 		return nil, define.ErrRuntimeStopped
 	}
-
 	imageName := p.config.InfraContainer.InfraImage
 	if imageName == "" {
 		imageName = r.config.Engine.InfraImage

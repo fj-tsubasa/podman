@@ -1,5 +1,6 @@
 import random
 import unittest
+import json
 
 import requests
 from dateutil.parser import parse
@@ -14,6 +15,13 @@ class ContainerTestCase(APITestCase):
         obj = r.json()
         self.assertEqual(len(obj), 1)
 
+    def test_list_filters(self):
+        r = requests.get(self.podman_url + "/v1.40/containers/json?filters%3D%7B%22status%22%3A%5B%22running%22%5D%7D")
+        self.assertEqual(r.status_code, 200, r.text)
+        payload = r.json()
+        containerAmnt = len(payload)
+        self.assertGreater(containerAmnt, 0)
+
     def test_list_all(self):
         r = requests.get(self.uri("/containers/json?all=true"))
         self.assertEqual(r.status_code, 200, r.text)
@@ -24,6 +32,52 @@ class ContainerTestCase(APITestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertId(r.content)
         _ = parse(r.json()["Created"])
+
+
+        r = requests.post(
+            self.podman_url + "/v1.40/containers/create?name=topcontainer",
+            json={"Cmd": ["top"],
+                  "Image": "alpine:latest",
+                  "Healthcheck": {
+                      "Test": ["CMD", "pidof", "top"],
+                      "Interval": 5000000000,
+                      "Timeout": 2000000000,
+                      "Retries": 3,
+                      "StartPeriod": 5000000000
+                  }
+            },
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        payload = r.json()
+        container_id = payload["Id"]
+        self.assertIsNotNone(container_id)
+
+        r = requests.get(self.podman_url + f"/v1.40/containers/{container_id}/json")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertId(r.content)
+        out = r.json()
+        self.assertIsNone(out["State"].get("Health"))
+        self.assertListEqual(["CMD", "pidof", "top"], out["Config"]["Healthcheck"]["Test"])
+        self.assertEqual(5000000000, out["Config"]["Healthcheck"]["Interval"])
+        self.assertEqual(2000000000, out["Config"]["Healthcheck"]["Timeout"])
+        self.assertEqual(3, out["Config"]["Healthcheck"]["Retries"])
+        self.assertEqual(5000000000, out["Config"]["Healthcheck"]["StartPeriod"])
+
+        r = requests.get(self.uri(f"/containers/{container_id}/json"))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertId(r.content)
+        out = r.json()
+        hc  = out["Config"]["Healthcheck"]["Test"]
+        self.assertListEqual(["CMD", "pidof", "top"], hc)
+
+        r = requests.post(self.podman_url + f"/v1.40/containers/{container_id}/start")
+        self.assertEqual(r.status_code, 204, r.text)
+
+        r = requests.get(self.podman_url + f"/v1.40/containers/{container_id}/json")
+        self.assertEqual(r.status_code, 200, r.text)
+        out = r.json()
+        state = out["State"]["Health"]
+        self.assertIsInstance(state, dict)
 
     def test_stats(self):
         r = requests.get(self.uri(self.resolve_container("/containers/{}/stats?stream=false")))
@@ -73,6 +127,18 @@ class ContainerTestCase(APITestCase):
 
     def test_logs(self):
         r = requests.get(self.uri(self.resolve_container("/containers/{}/logs?stdout=true")))
+        self.assertEqual(r.status_code, 200, r.text)
+        r = requests.post(
+            self.podman_url + "/v1.40/containers/create?name=topcontainer",
+            json={"Cmd": ["top", "ls"], "Image": "alpine:latest"},
+        )
+        self.assertEqual(r.status_code, 201, r.text)
+        payload = r.json()
+        container_id = payload["Id"]
+        self.assertIsNotNone(container_id)
+        r = requests.get(self.podman_url + f"/v1.40/containers/{payload['Id']}/logs?follow=false&stdout=true&until=0")
+        self.assertEqual(r.status_code, 200, r.text)
+        r = requests.get(self.podman_url + f"/v1.40/containers/{payload['Id']}/logs?follow=false&stdout=true&until=1")
         self.assertEqual(r.status_code, 200, r.text)
 
     def test_commit(self):

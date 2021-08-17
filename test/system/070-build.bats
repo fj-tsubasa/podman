@@ -21,7 +21,28 @@ EOF
 
     # The 'apk' command can take a long time to fetch files; bump timeout
     PODMAN_TIMEOUT=240 run_podman build -t build_test --format=docker $tmpdir
-    is "$output" ".*STEP 4: COMMIT" "COMMIT seen in log"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
+
+    run_podman run --rm build_test cat /$rand_filename
+    is "$output"   "$rand_content"   "reading generated file in image"
+
+    run_podman rmi -f build_test
+}
+
+@test "podman buildx - basic test" {
+    rand_filename=$(random_string 20)
+    rand_content=$(random_string 50)
+
+    tmpdir=$PODMAN_TMPDIR/build-test
+    mkdir -p $tmpdir
+    dockerfile=$tmpdir/Dockerfile
+    cat >$dockerfile <<EOF
+FROM $IMAGE
+RUN echo $rand_content > /$rand_filename
+EOF
+
+    run_podman buildx build --load -t build_test --format=docker $tmpdir
+    is "$output" ".*COMMIT" "COMMIT seen in log"
 
     run_podman run --rm build_test cat /$rand_filename
     is "$output"   "$rand_content"   "reading generated file in image"
@@ -44,7 +65,7 @@ EOF
 
     # The 'apk' command can take a long time to fetch files; bump timeout
     PODMAN_TIMEOUT=240 run_podman build -t build_test -f - --format=docker $tmpdir < $containerfile
-    is "$output" ".*STEP 4: COMMIT" "COMMIT seen in log"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
 
     run_podman run --rm build_test cat /$rand_filename
     is "$output"   "$rand_content"   "reading generated file in image"
@@ -110,7 +131,7 @@ EOF
 
     # One of: ADD myfile /myfile or COPY . .
     run_podman build  -t build_test -f $tmpdir/Dockerfile $tmpdir
-    is "$output" ".*STEP 3: COMMIT" "COMMIT seen in log"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
     if [[ "$output" =~ "Using cache" ]]; then
         is "$output" "[no instance of 'Using cache']" "no cache used"
     fi
@@ -124,7 +145,7 @@ EOF
     run tar -C $tmpdir -cJf $tmpdir/myfile.tar.xz subtest
 
     run_podman build -t build_test -f $tmpdir/Dockerfile $tmpdir
-    is "$output" ".*STEP 3: COMMIT" "COMMIT seen in log"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
 
     # Since the tarfile is modified, podman SHOULD NOT use a cached layer.
     if [[ "$output" =~ "Using cache" ]]; then
@@ -509,6 +530,40 @@ EOF
     done
 }
 
+# Regression test for #9867
+# Make sure that if you exclude everything in context dir, that
+# the Containerfile/Dockerfile in the context dir are used
+@test "podman build with ignore '*'" {
+    local tmpdir=$PODMAN_TMPDIR/build-test-$(random_string 10)
+    mkdir -p $tmpdir
+
+    cat >$tmpdir/Containerfile <<EOF
+FROM scratch
+EOF
+
+cat >$tmpdir/.dockerignore <<EOF
+*
+EOF
+
+    run_podman build -t build_test $tmpdir
+
+    # Rename Containerfile to Dockerfile
+    mv $tmpdir/Containerfile $tmpdir/Dockerfile
+
+    run_podman build -t build_test $tmpdir
+
+    # Rename Dockerfile to foofile
+    mv $tmpdir/Dockerfile $tmpdir/foofile
+
+    run_podman 125 build -t build_test $tmpdir
+    is "$output" ".*Dockerfile: no such file or directory"
+
+    run_podman build -t build_test -f $tmpdir/foofile $tmpdir
+
+    # Clean up
+    run_podman rmi -f build_test
+}
+
 @test "podman build - stdin test" {
     # Random workdir, and random string to verify build output
     workdir=/$(random_string 10)
@@ -519,8 +574,8 @@ RUN mkdir $workdir
 WORKDIR $workdir
 RUN /bin/echo $random_echo
 EOF
-    is "$output" ".*STEP 5: COMMIT" "COMMIT seen in log"
-    is "$output" ".*STEP .: RUN /bin/echo $random_echo"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
+    is "$output" ".*STEP .*: RUN /bin/echo $random_echo"
 
     run_podman run --rm build_test pwd
     is "$output" "$workdir" "pwd command in container"
@@ -571,10 +626,10 @@ EOF
     if is_remote; then remote_extra=".*";fi
     expect="${random1}
 .*
-STEP 1: FROM $IMAGE
-STEP 2: RUN echo x${random2}y
+STEP 1/2: FROM $IMAGE
+STEP 2/2: RUN echo x${random2}y
 x${random2}y${remote_extra}
-STEP 3: COMMIT build_test${remote_extra}
+COMMIT build_test${remote_extra}
 --> [0-9a-f]\{11\}
 Successfully tagged localhost/build_test:latest
 [0-9a-f]\{64\}
@@ -715,16 +770,9 @@ RUN echo $random_string
 EOF
 
     run_podman 125 build -t build_test --pull-never $tmpdir
-    # FIXME: this is just ridiculous. Even after #10030 and #10034, Ubuntu
-    # remote *STILL* flakes this test! It fails with the correct exit status,
-    # but the error output is 'Error: stream dropped, unexpected failure'
-    # Let's just stop checking on podman-remote. As long as it exits 125,
-    # we're happy.
-    if ! is_remote; then
-        is "$output" \
-           ".*Error: error creating build container: quay.io/libpod/nosuchimage:nosuchtag: image not known" \
-           "--pull-never fails with expected error message"
-    fi
+    is "$output" \
+       ".*Error: error creating build container: quay.io/libpod/nosuchimage:nosuchtag: image not known" \
+       "--pull-never fails with expected error message"
 }
 
 @test "podman build --logfile test" {
@@ -739,7 +787,7 @@ EOF
 
     run_podman build -t build_test --format=docker --logfile=$tmpdir/logfile $tmpbuilddir
     run cat $tmpdir/logfile
-    is "$output" ".*STEP 2: COMMIT" "COMMIT seen in log"
+    is "$output" ".*COMMIT" "COMMIT seen in log"
 
     run_podman rmi -f build_test
 }
@@ -757,7 +805,7 @@ RUN cat /proc/self/attr/current
 EOF
 
     run_podman build -t build_test --security-opt label=level:s0:c3,c4 --format=docker $tmpbuilddir
-    is "$output" ".*s0:c3,c4STEP 3: COMMIT" "label setting level"
+    is "$output" ".*s0:c3,c4COMMIT" "label setting level"
 
     run_podman rmi -f build_test
 }
@@ -817,7 +865,7 @@ EOF
     run_podman rmi -f build_test
 }
 
-@test "podman build -f test " {
+@test "podman build -f test" {
     tmpdir=$PODMAN_TMPDIR/build-test
     subdir=$tmpdir/subdir
     mkdir -p $subdir
@@ -843,12 +891,53 @@ EOF
     run_podman rmi -f build_test
 }
 
+@test "podman build .dockerignore failure test" {
+    tmpdir=$PODMAN_TMPDIR/build-test
+    subdir=$tmpdir/subdir
+    mkdir -p $subdir
+
+    cat >$tmpdir/.dockerignore <<EOF
+*
+subdir
+!*/sub1*
+EOF
+    cat >$tmpdir/Containerfile <<EOF
+FROM $IMAGE
+COPY ./ ./
+COPY subdir ./
+EOF
+    run_podman 125 build -t build_test $tmpdir
+    is "$output" ".*Error: error building at STEP \"COPY subdir ./\"" ".dockerignore was ignored"
+}
+
+@test "podman build .containerignore and .dockerignore test" {
+    tmpdir=$PODMAN_TMPDIR/build-test
+    mkdir -p $tmpdir
+    touch $tmpdir/test1 $tmpdir/test2
+    cat >$tmpdir/.containerignore <<EOF
+test2*
+EOF
+    cat >$tmpdir/.dockerignore <<EOF
+test1*
+EOF
+    cat >$tmpdir/Containerfile <<EOF
+FROM $IMAGE
+COPY ./ /tmp/test/
+RUN ls /tmp/test/
+EOF
+    run_podman build -t build_test $tmpdir
+    is "$output" ".*test1" "test1 should exists in the final image"
+}
+
 function teardown() {
     # A timeout or other error in 'build' can leave behind stale images
     # that podman can't even see and which will cascade into subsequent
     # test failures. Try a last-ditch force-rm in cleanup, ignoring errors.
     run_podman '?' rm -a -f
     run_podman '?' rmi -f build_test
+
+    # Many of the tests above leave interim layers behind. Clean them up.
+    run_podman '?' image prune -f
 
     basic_teardown
 }

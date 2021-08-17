@@ -1085,6 +1085,8 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//     description: no error
 	//   404:
 	//     $ref: "#/responses/NoSuchContainer"
+	//   409:
+	//     $ref: "#/responses/ConflictError"
 	//   500:
 	//     $ref: "#/responses/InternalError"
 	r.HandleFunc(VersionedPath("/libpod/containers/{name}/stats"), s.APIHandler(compat.StatsContainer)).Methods(http.MethodGet)
@@ -1106,6 +1108,11 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: boolean
 	//    default: true
 	//    description: Stream the output
+	//  - in: query
+	//    name: interval
+	//    type: integer
+	//    default: 5
+	//    description: Time in seconds between stats reports
 	// produces:
 	// - application/json
 	// responses:
@@ -1113,6 +1120,8 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//     description: no error
 	//   404:
 	//     $ref: "#/responses/NoSuchContainer"
+	//   409:
+	//     $ref: "#/responses/ConflictError"
 	//   500:
 	//     $ref: "#/responses/InternalError"
 	r.HandleFunc(VersionedPath("/libpod/containers/stats"), s.APIHandler(libpod.StatsContainer)).Methods(http.MethodGet)
@@ -1505,6 +1514,15 @@ func (s *APIServer) registerContainersHandlers(r *mux.Router) error {
 	//    type: string
 	//    required: true
 	//    description: the name or id of the container
+	//  - in: query
+	//    name: parent
+	//    type: string
+	//    description: specify a second layer which is used to compare against it instead of the parent layer
+	//  - in: query
+	//    name: diffType
+	//    type: string
+	//    enum: [all, container, image]
+	//    description: select what you want to match, default is all
 	// responses:
 	//   200:
 	//     description: Array of Changes

@@ -65,6 +65,16 @@ t GET libpod/containers/json?last=1 200 \
 
 cid=$(jq -r '.[0].Id' <<<"$output")
 
+if root; then
+    t GET libpod/containers/stats?containers='[$cid]' 200
+else
+    if have_cgroupsv2; then
+        t GET libpod/containers/stats?containers='[$cid]' 200
+    else
+        t GET libpod/containers/stats?containers='[$cid]' 409
+    fi
+fi
+
 t DELETE libpod/containers/$cid 204
 
 # Issue #6799: it should be possible to start a container, even w/o args.
@@ -211,15 +221,11 @@ t GET containers/$cid/json 200 \
 t POST containers/create Image=$IMAGE Entrypoint='["top"]' 201 \
   .Id~[0-9a-f]\\{64\\}
 cid_top=$(jq -r '.Id' <<<"$output")
-network_expect="{}"
-if root; then
-    network_expect='.podman.NetworkID=podman'
-fi
 t GET containers/${cid_top}/json 200 \
   .Config.Entrypoint[0]="top" \
   .Config.Cmd='[]' \
-  .Path="top"
-  .NetworkSettings.Networks="$network_expect"
+  .Path="top" \
+  .NetworkSettings.Networks.podman.NetworkID=podman
 t POST  containers/${cid_top}/start 204
 # make sure the container is running
 t GET containers/${cid_top}/json 200 \
@@ -348,5 +354,16 @@ t POST containers/create Image=$IMAGE HostConfig='{"NetworkMode":"default"}' 201
 cid=$(jq -r '.Id' <<<"$output")
 t GET containers/$cid/json 200 \
   .HostConfig.NetworkMode="bridge"
+
+t DELETE containers/$cid?v=true 204
+
+# Test Compat Create with healthcheck, check default values
+t POST containers/create Image=$IMAGE Cmd='["top"]' Healthcheck='{"Test":["true"]}' 201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+t GET containers/$cid/json 200 \
+  .Config.Healthcheck.Interval=30000000000 \
+  .Config.Healthcheck.Timeout=30000000000 \
+  .Config.Healthcheck.Retries=3
 
 t DELETE containers/$cid?v=true 204

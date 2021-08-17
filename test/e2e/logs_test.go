@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	. "github.com/containers/podman/v3/test/utils"
 	. "github.com/onsi/ginkgo"
@@ -135,6 +136,34 @@ var _ = Describe("Podman logs", func() {
 			Expect(len(results.OutputToStringArray())).To(Equal(3))
 		})
 
+		It("until duration 10m: "+log, func() {
+			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
+			logc.WaitWithDefaultTimeout()
+			Expect(logc).To(Exit(0))
+			cid := logc.OutputToString()
+
+			results := podmanTest.Podman([]string{"logs", "--until", "10m", cid})
+			results.WaitWithDefaultTimeout()
+			Expect(results).To(Exit(0))
+			Expect(len(results.OutputToStringArray())).To(Equal(0))
+		})
+
+		It("until time NOW: "+log, func() {
+
+			logc := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
+			logc.WaitWithDefaultTimeout()
+			Expect(logc).To(Exit(0))
+			cid := logc.OutputToString()
+
+			now := time.Now()
+			now = now.Add(time.Minute * 1)
+			nowS := now.Format(time.RFC3339)
+			results := podmanTest.Podman([]string{"logs", "--until", nowS, cid})
+			results.WaitWithDefaultTimeout()
+			Expect(results).To(Exit(0))
+			Expect(len(results.OutputToStringArray())).To(Equal(3))
+		})
+
 		It("latest and container name should fail: "+log, func() {
 			results := podmanTest.Podman([]string{"logs", "-l", "foobar"})
 			results.WaitWithDefaultTimeout()
@@ -145,12 +174,12 @@ var _ = Describe("Podman logs", func() {
 			SkipIfRemote("FIXME: podman-remote logs does not support showing two containers at the same time")
 			log1 := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
 			log1.WaitWithDefaultTimeout()
-			Expect(log1.ExitCode()).To(Equal(0))
+			Expect(log1).Should(Exit(0))
 			cid1 := log1.OutputToString()
 
 			log2 := podmanTest.Podman([]string{"run", "--log-driver", log, "-dt", ALPINE, "sh", "-c", "echo podman; echo podman; echo podman"})
 			log2.WaitWithDefaultTimeout()
-			Expect(log2.ExitCode()).To(Equal(0))
+			Expect(log2).Should(Exit(0))
 			cid2 := log2.OutputToString()
 
 			results := podmanTest.Podman([]string{"logs", cid1, cid2})

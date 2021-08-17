@@ -88,7 +88,8 @@ function _run_bindings() {
 }
 
 function _run_docker-py() {
-    msg "This is docker-py stub, it is only a stub"
+    source venv/bin/activate
+    make run-docker-py-tests
 }
 
 function _run_endpoint() {
@@ -145,9 +146,9 @@ function _run_swagger() {
     elif [[ -n "$CIRRUS_TAG" ]]; then
         upload_bucket="libpod-master-releases"
         upload_filename="swagger-$CIRRUS_TAG.yaml"
-    elif [[ "$CIRRUS_BRANCH" == "master" ]]; then
+    elif [[ "$CIRRUS_BRANCH" == "main" ]]; then
         upload_bucket="libpod-master-releases"
-        # readthedocs versioning uses "latest" for "master" (default) branch
+        # readthedocs versioning uses "latest" for "main" (default) branch
         upload_filename="swagger-latest.yaml"
     elif [[ -n "$CIRRUS_BRANCH" ]]; then
         upload_bucket="libpod-master-releases"
@@ -173,7 +174,7 @@ function _run_swagger() {
     trap "rm -f $envvarsfile" EXIT  # contains secrets
     # Warning: These values must _not_ be quoted, podman will not remove them.
     #shellcheck disable=SC2154
-    cat <<eof>>$envvarsfile
+    cat <<eof >>$envvarsfile
 GCPJSON=$GCPJSON
 GCPNAME=$GCPNAME
 GCPPROJECT=$GCPPROJECT
@@ -196,6 +197,8 @@ function _run_consistency() {
     SUGGESTION="run 'make vendor' and commit all changes" ./hack/tree_status.sh
     make generate-bindings
     SUGGESTION="run 'make generate-bindings' and commit all changes" ./hack/tree_status.sh
+    make completions
+    SUGGESTION="run 'make completions' and commit all changes" ./hack/tree_status.sh
 }
 
 function _run_build() {
@@ -334,6 +337,11 @@ msg "************************************************************"
 
 # shellcheck disable=SC2154
 if [[ "$PRIV_NAME" == "rootless" ]] && [[ "$UID" -eq 0 ]]; then
+    # Remove /var/lib/cni, it is not required for rootless cni.
+    # We have to test that it works without this directory.
+    # https://github.com/containers/podman/issues/10857
+    rm -rf /var/lib/cni
+
     req_env_vars ROOTLESS_USER
     msg "Re-executing runner through ssh as user '$ROOTLESS_USER'"
     msg "************************************************************"

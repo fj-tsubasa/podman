@@ -160,6 +160,15 @@ type CommitOptions struct {
 	Writer         io.Writer
 }
 
+type CopyOptions struct {
+	// If used with ContainerCopyFromArchive and set to true
+	// it will change ownership of files from the source tar archive
+	// to the primary uid/gid of the destination container.
+	Chown bool
+	// Map to translate path names.
+	Rename map[string]string
+}
+
 type CommitReport struct {
 	Id string //nolint
 }
@@ -200,6 +209,7 @@ type RestoreOptions struct {
 	TCPEstablished  bool
 	ImportPrevious  string
 	PublishPorts    []specgen.PortMapping
+	Pod             string
 }
 
 type RestoreReport struct {
@@ -235,6 +245,8 @@ type ContainerLogsOptions struct {
 	Names bool
 	// Show logs since this timestamp.
 	Since time.Time
+	// Show logs until this timestamp.
+	Until time.Time
 	// Number of lines to display at the end of the output.
 	Tail int64
 	// Show timestamps in the logs.
@@ -428,6 +440,8 @@ type ContainerStatsOptions struct {
 	Latest bool
 	// Stream stats.
 	Stream bool
+	// Interval in seconds
+	Interval int
 }
 
 // ContainerStatsReport is used for streaming container stats.

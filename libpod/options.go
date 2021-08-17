@@ -16,10 +16,12 @@ import (
 	"github.com/containers/podman/v3/libpod/events"
 	"github.com/containers/podman/v3/pkg/namespaces"
 	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v3/pkg/specgen"
 	"github.com/containers/podman/v3/pkg/util"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/cri-o/ocicni/pkg/ocicni"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -457,6 +459,19 @@ func WithDefaultInfraCommand(cmd string) RuntimeOption {
 	}
 }
 
+// WithDefaultInfraName sets the infra container name for a single pod.
+func WithDefaultInfraName(name string) RuntimeOption {
+	return func(rt *Runtime) error {
+		if rt.valid {
+			return define.ErrRuntimeFinalized
+		}
+
+		rt.config.Engine.InfraImage = name
+
+		return nil
+	}
+}
+
 // WithRenumber instructs libpod to perform a lock renumbering while
 // initializing. This will handle migrations from early versions of libpod with
 // file locks to newer versions with SHM locking, as well as changes in the
@@ -559,7 +574,6 @@ func WithMaxLogSize(limit int64) CtrCreateOption {
 		if ctr.valid {
 			return define.ErrRuntimeFinalized
 		}
-
 		ctr.config.LogSize = limit
 
 		return nil
@@ -867,7 +881,6 @@ func WithMountNSFrom(nsCtr *Container) CtrCreateOption {
 		if err := checkDependencyContainer(nsCtr, ctr); err != nil {
 			return err
 		}
-
 		ctr.config.MountNsCtr = nsCtr.ID()
 
 		return nil
@@ -943,8 +956,9 @@ func WithUserNSFrom(nsCtr *Container) CtrCreateOption {
 		}
 
 		ctr.config.UserNsCtr = nsCtr.ID()
-		ctr.config.IDMappings = nsCtr.config.IDMappings
-
+		if err := JSONDeepCopy(nsCtr.IDMappings(), &ctr.config.IDMappings); err != nil {
+			return err
+		}
 		g := generate.Generator{Config: ctr.config.Spec}
 
 		g.ClearLinuxUIDMappings()
@@ -955,7 +969,6 @@ func WithUserNSFrom(nsCtr *Container) CtrCreateOption {
 		for _, gidmap := range nsCtr.config.IDMappings.GIDMap {
 			g.AddLinuxGIDMapping(uint32(gidmap.HostID), uint32(gidmap.ContainerID), uint32(gidmap.Size))
 		}
-		ctr.config.IDMappings = nsCtr.config.IDMappings
 		return nil
 	}
 }
@@ -1632,6 +1645,32 @@ func WithVolumeUID(uid int) VolumeCreateOption {
 	}
 }
 
+// WithVolumeSize sets the maximum size of the volume
+func WithVolumeSize(size uint64) VolumeCreateOption {
+	return func(volume *Volume) error {
+		if volume.valid {
+			return define.ErrVolumeFinalized
+		}
+
+		volume.config.Size = size
+
+		return nil
+	}
+}
+
+// WithVolumeInodes sets the maximum inodes of the volume
+func WithVolumeInodes(inodes uint64) VolumeCreateOption {
+	return func(volume *Volume) error {
+		if volume.valid {
+			return define.ErrVolumeFinalized
+		}
+
+		volume.config.Inodes = inodes
+
+		return nil
+	}
+}
+
 // WithVolumeGID sets the GID that the volume will be created as.
 func WithVolumeGID(gid int) VolumeCreateOption {
 	return func(volume *Volume) error {
@@ -1755,6 +1794,21 @@ func WithPidFile(pidFile string) CtrCreateOption {
 	}
 }
 
+// WithInitCtrType indicates the container is a initcontainer
+func WithInitCtrType(containerType string) CtrCreateOption {
+	return func(ctr *Container) error {
+		if ctr.valid {
+			return define.ErrCtrFinalized
+		}
+		// Make sure the type is valid
+		if containerType == define.OneShotInitContainer || containerType == define.AlwaysInitContainer {
+			ctr.config.InitContainerType = containerType
+			return nil
+		}
+		return errors.Errorf("%s is invalid init container type", containerType)
+	}
+}
+
 // Pod Creation Options
 
 // WithInfraImage sets the infra image for libpod.
@@ -1783,6 +1837,19 @@ func WithInfraCommand(cmd []string) PodCreateOption {
 		}
 
 		pod.config.InfraContainer.InfraCommand = cmd
+		return nil
+	}
+}
+
+// WithInfraName sets the infra container name for a single pod.
+func WithInfraName(name string) PodCreateOption {
+	return func(pod *Pod) error {
+		if pod.valid {
+			return define.ErrPodFinalized
+		}
+
+		pod.config.InfraContainer.InfraName = name
+
 		return nil
 	}
 }
@@ -2356,6 +2423,82 @@ func WithVolatile() CtrCreateOption {
 		}
 
 		ctr.config.Volatile = true
+
+		return nil
+	}
+}
+
+// WithPodUserns sets the userns for the infra container in a pod.
+func WithPodUserns(userns specgen.Namespace) PodCreateOption {
+	return func(pod *Pod) error {
+		if pod.valid {
+			return define.ErrPodFinalized
+		}
+
+		if !pod.config.InfraContainer.HasInfraContainer {
+			return errors.Wrapf(define.ErrInvalidArg, "cannot configure pod userns as no infra container is being created")
+		}
+
+		pod.config.InfraContainer.Userns = userns
+
+		return nil
+	}
+}
+
+// WithPodCPUPAQ takes the given cpu period and quota and inserts them in the proper place.
+func WithPodCPUPAQ(period uint64, quota int64) PodCreateOption {
+	return func(pod *Pod) error {
+		if pod.valid {
+			return define.ErrPodFinalized
+		}
+		if pod.CPUPeriod() != 0 && pod.CPUQuota() != 0 {
+			pod.config.InfraContainer.ResourceLimits.CPU = &specs.LinuxCPU{
+				Period: &period,
+				Quota:  &quota,
+			}
+		} else {
+			pod.config.InfraContainer.ResourceLimits = &specs.LinuxResources{}
+			pod.config.InfraContainer.ResourceLimits.CPU = &specs.LinuxCPU{
+				Period: &period,
+				Quota:  &quota,
+			}
+		}
+		return nil
+	}
+}
+
+// WithPodCPUSetCPUS computes and sets the Cpus linux resource string which determines the amount of cores, from those available,  we are allowed to execute on
+func WithPodCPUSetCPUs(inp string) PodCreateOption {
+	return func(pod *Pod) error {
+		if pod.valid {
+			return define.ErrPodFinalized
+		}
+		if pod.ResourceLim().CPU.Period != nil {
+			pod.config.InfraContainer.ResourceLimits.CPU.Cpus = inp
+		} else {
+			pod.config.InfraContainer.ResourceLimits = &specs.LinuxResources{}
+			pod.config.InfraContainer.ResourceLimits.CPU = &specs.LinuxCPU{}
+			pod.config.InfraContainer.ResourceLimits.CPU.Cpus = inp
+		}
+		return nil
+	}
+}
+
+func WithPodPidNS(inp specgen.Namespace) PodCreateOption {
+	return func(p *Pod) error {
+		if p.valid {
+			return define.ErrPodFinalized
+		}
+		if p.config.UsePodPID {
+			switch inp.NSMode {
+			case "container":
+				return errors.Wrap(define.ErrInvalidArg, "Cannot take container in a different NS as an argument")
+			case "host":
+				p.config.UsePodPID = false
+			}
+			p.config.InfraContainer.PidNS = inp
+		}
+
 		return nil
 	}
 }

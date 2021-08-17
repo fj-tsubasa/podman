@@ -498,6 +498,14 @@ func DefineCreateFlags(cmd *cobra.Command, cf *ContainerCLIOpts) {
 	)
 	_ = cmd.RegisterFlagCompletionFunc(variantFlagName, completion.AutocompleteNone)
 
+	personalityFlagName := "personality"
+	createFlags.StringVar(
+		&cf.Personality,
+		personalityFlagName, "",
+		"Configure execution domain using personality (e.g., LINUX/LINUX32)",
+	)
+	_ = cmd.RegisterFlagCompletionFunc(personalityFlagName, AutocompleteNamespace)
+
 	pidFlagName := "pid"
 	createFlags.String(
 		pidFlagName, "",
@@ -654,15 +662,6 @@ func DefineCreateFlags(cmd *cobra.Command, cf *ContainerCLIOpts) {
 		"Timeout (in seconds) that containers stopped by user command have to exit. If exceeded, the container will be forcibly stopped via SIGKILL.",
 	)
 	_ = cmd.RegisterFlagCompletionFunc(stopTimeoutFlagName, completion.AutocompleteNone)
-
-	storageOptFlagName := "storage-opt"
-	createFlags.StringSliceVar(
-		&cf.StorageOpt,
-		storageOptFlagName, []string{},
-		"Storage driver options per container",
-	)
-	//FIXME: What should we suggest here? The flag is not in the man page.
-	_ = cmd.RegisterFlagCompletionFunc(storageOptFlagName, completion.AutocompleteNone)
 
 	subgidnameFlagName := "subgidname"
 	createFlags.StringVar(

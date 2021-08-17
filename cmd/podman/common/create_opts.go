@@ -61,6 +61,7 @@ type ContainerCLIOpts struct {
 	HTTPProxy         bool
 	ImageVolume       string
 	Init              bool
+	InitContainerType string
 	InitPath          string
 	Interactive       bool
 	IPC               string
@@ -80,6 +81,7 @@ type ContainerCLIOpts struct {
 	Arch              string
 	OS                string
 	Variant           string
+	Personality       string
 	PID               string
 	PIDsLimit         *int64
 	Platform          string
@@ -354,51 +356,55 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 		CPUSetMems: cc.HostConfig.CpusetMems,
 		// Detach:            false, // don't need
 		// DetachKeys:        "",    // don't need
-		Devices:          devices,
-		DeviceCGroupRule: nil,
-		DeviceReadBPs:    readBps,
-		DeviceReadIOPs:   readIops,
-		DeviceWriteBPs:   writeBps,
-		DeviceWriteIOPs:  writeIops,
-		Entrypoint:       entrypoint,
-		Env:              cc.Config.Env,
-		Expose:           expose,
-		GroupAdd:         cc.HostConfig.GroupAdd,
-		Hostname:         cc.Config.Hostname,
-		ImageVolume:      "bind",
-		Init:             init,
-		Interactive:      cc.Config.OpenStdin,
-		IPC:              string(cc.HostConfig.IpcMode),
-		Label:            stringMaptoArray(cc.Config.Labels),
-		LogDriver:        cc.HostConfig.LogConfig.Type,
-		LogOptions:       stringMaptoArray(cc.HostConfig.LogConfig.Config),
-		Name:             cc.Name,
-		OOMScoreAdj:      cc.HostConfig.OomScoreAdj,
-		Arch:             "",
-		OS:               "",
-		Variant:          "",
-		PID:              string(cc.HostConfig.PidMode),
-		PIDsLimit:        cc.HostConfig.PidsLimit,
-		Privileged:       cc.HostConfig.Privileged,
-		PublishAll:       cc.HostConfig.PublishAllPorts,
-		Quiet:            false,
-		ReadOnly:         cc.HostConfig.ReadonlyRootfs,
-		ReadOnlyTmpFS:    true, // podman default
-		Rm:               cc.HostConfig.AutoRemove,
-		SecurityOpt:      cc.HostConfig.SecurityOpt,
-		StopSignal:       cc.Config.StopSignal,
-		StorageOpt:       stringMaptoArray(cc.HostConfig.StorageOpt),
-		Sysctl:           stringMaptoArray(cc.HostConfig.Sysctls),
-		Systemd:          "true", // podman default
-		TmpFS:            parsedTmp,
-		TTY:              cc.Config.Tty,
-		User:             cc.Config.User,
-		UserNS:           string(cc.HostConfig.UsernsMode),
-		UTS:              string(cc.HostConfig.UTSMode),
-		Mount:            mounts,
-		VolumesFrom:      cc.HostConfig.VolumesFrom,
-		Workdir:          cc.Config.WorkingDir,
-		Net:              &netInfo,
+		Devices:           devices,
+		DeviceCGroupRule:  nil,
+		DeviceReadBPs:     readBps,
+		DeviceReadIOPs:    readIops,
+		DeviceWriteBPs:    writeBps,
+		DeviceWriteIOPs:   writeIops,
+		Entrypoint:        entrypoint,
+		Env:               cc.Config.Env,
+		Expose:            expose,
+		GroupAdd:          cc.HostConfig.GroupAdd,
+		Hostname:          cc.Config.Hostname,
+		ImageVolume:       "bind",
+		Init:              init,
+		Interactive:       cc.Config.OpenStdin,
+		IPC:               string(cc.HostConfig.IpcMode),
+		Label:             stringMaptoArray(cc.Config.Labels),
+		LogDriver:         cc.HostConfig.LogConfig.Type,
+		LogOptions:        stringMaptoArray(cc.HostConfig.LogConfig.Config),
+		Name:              cc.Name,
+		OOMScoreAdj:       cc.HostConfig.OomScoreAdj,
+		Arch:              "",
+		OS:                "",
+		Variant:           "",
+		PID:               string(cc.HostConfig.PidMode),
+		PIDsLimit:         cc.HostConfig.PidsLimit,
+		Privileged:        cc.HostConfig.Privileged,
+		PublishAll:        cc.HostConfig.PublishAllPorts,
+		Quiet:             false,
+		ReadOnly:          cc.HostConfig.ReadonlyRootfs,
+		ReadOnlyTmpFS:     true, // podman default
+		Rm:                cc.HostConfig.AutoRemove,
+		SecurityOpt:       cc.HostConfig.SecurityOpt,
+		StopSignal:        cc.Config.StopSignal,
+		StorageOpt:        stringMaptoArray(cc.HostConfig.StorageOpt),
+		Sysctl:            stringMaptoArray(cc.HostConfig.Sysctls),
+		Systemd:           "true", // podman default
+		TmpFS:             parsedTmp,
+		TTY:               cc.Config.Tty,
+		User:              cc.Config.User,
+		UserNS:            string(cc.HostConfig.UsernsMode),
+		UTS:               string(cc.HostConfig.UTSMode),
+		Mount:             mounts,
+		VolumesFrom:       cc.HostConfig.VolumesFrom,
+		Workdir:           cc.Config.WorkingDir,
+		Net:               &netInfo,
+		HealthInterval:    DefaultHealthCheckInterval,
+		HealthRetries:     DefaultHealthCheckRetries,
+		HealthTimeout:     DefaultHealthCheckTimeout,
+		HealthStartPeriod: DefaultHealthCheckStartPeriod,
 	}
 	if !rootless.IsRootless() {
 		var ulimits []string
@@ -517,11 +523,26 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 		cliOpts.OOMKillDisable = *cc.HostConfig.OomKillDisable
 	}
 	if cc.Config.Healthcheck != nil {
-		cliOpts.HealthCmd = strings.Join(cc.Config.Healthcheck.Test, " ")
-		cliOpts.HealthInterval = cc.Config.Healthcheck.Interval.String()
-		cliOpts.HealthRetries = uint(cc.Config.Healthcheck.Retries)
-		cliOpts.HealthStartPeriod = cc.Config.Healthcheck.StartPeriod.String()
-		cliOpts.HealthTimeout = cc.Config.Healthcheck.Timeout.String()
+		finCmd := ""
+		for _, str := range cc.Config.Healthcheck.Test {
+			finCmd = finCmd + str + " "
+		}
+		if len(finCmd) > 1 {
+			finCmd = finCmd[:len(finCmd)-1]
+		}
+		cliOpts.HealthCmd = finCmd
+		if cc.Config.Healthcheck.Interval > 0 {
+			cliOpts.HealthInterval = cc.Config.Healthcheck.Interval.String()
+		}
+		if cc.Config.Healthcheck.Retries > 0 {
+			cliOpts.HealthRetries = uint(cc.Config.Healthcheck.Retries)
+		}
+		if cc.Config.Healthcheck.StartPeriod > 0 {
+			cliOpts.HealthStartPeriod = cc.Config.Healthcheck.StartPeriod.String()
+		}
+		if cc.Config.Healthcheck.Timeout > 0 {
+			cliOpts.HealthTimeout = cc.Config.Healthcheck.Timeout.String()
+		}
 	}
 
 	// specgen assumes the image name is arg[0]

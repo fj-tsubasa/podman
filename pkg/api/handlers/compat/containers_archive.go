@@ -1,6 +1,7 @@
 package compat
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/containers/podman/v3/libpod/define"
 	"github.com/containers/podman/v3/pkg/api/handlers/utils"
 	"github.com/containers/podman/v3/pkg/copy"
+	"github.com/containers/podman/v3/pkg/domain/entities"
 	"github.com/containers/podman/v3/pkg/domain/infra/abi"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
@@ -92,11 +94,14 @@ func handleHeadAndGet(w http.ResponseWriter, r *http.Request, decoder *schema.De
 
 func handlePut(w http.ResponseWriter, r *http.Request, decoder *schema.Decoder, runtime *libpod.Runtime) {
 	query := struct {
-		Path string `schema:"path"`
+		Path   string `schema:"path"`
+		Chown  bool   `schema:"copyUIDGID"`
+		Rename string `schema:"rename"`
 		// TODO handle params below
 		NoOverwriteDirNonDir bool `schema:"noOverwriteDirNonDir"`
-		CopyUIDGID           bool `schema:"copyUIDGID"`
-	}{}
+	}{
+		Chown: utils.IsLibpodRequest(r), // backward compatibility
+	}
 
 	err := decoder.Decode(&query, r.URL.Query())
 	if err != nil {
@@ -104,10 +109,19 @@ func handlePut(w http.ResponseWriter, r *http.Request, decoder *schema.Decoder, 
 		return
 	}
 
+	var rename map[string]string
+	if query.Rename != "" {
+		if err := json.Unmarshal([]byte(query.Rename), &rename); err != nil {
+			utils.Error(w, "Bad Request.", http.StatusBadRequest, errors.Wrap(err, "couldn't decode the query"))
+			return
+		}
+	}
+
 	containerName := utils.GetName(r)
 	containerEngine := abi.ContainerEngine{Libpod: runtime}
 
-	copyFunc, err := containerEngine.ContainerCopyFromArchive(r.Context(), containerName, query.Path, r.Body)
+	copyOptions := entities.CopyOptions{Chown: query.Chown, Rename: rename}
+	copyFunc, err := containerEngine.ContainerCopyFromArchive(r.Context(), containerName, query.Path, r.Body, copyOptions)
 	if errors.Cause(err) == define.ErrNoSuchCtr || os.IsNotExist(err) {
 		// 404 is returned for an absent container and path.  The
 		// clients must deal with it accordingly.

@@ -144,16 +144,27 @@ func MakeContainer(ctx context.Context, rt *libpod.Runtime, s *specgen.SpecGener
 		options = append(options, libpod.WithNetworkAliases(s.Aliases))
 	}
 
+	if containerType := s.InitContainerType; len(containerType) > 0 {
+		options = append(options, libpod.WithInitCtrType(containerType))
+	}
+
 	if len(s.Devices) > 0 {
 		opts = extractCDIDevices(s)
 		options = append(options, opts...)
 	}
-
 	runtimeSpec, err := SpecGenToOCI(ctx, s, rt, rtc, newImage, finalMounts, pod, command)
 	if err != nil {
 		return nil, err
 	}
-	return rt.NewContainer(ctx, runtimeSpec, options...)
+
+	ctr, err := rt.NewContainer(ctx, runtimeSpec, options...)
+	if err != nil {
+		return ctr, err
+	}
+
+	// Copy the content from the underlying image into the newly created
+	// volume if configured to do so.
+	return ctr, rt.PrepareVolumeOnCreateContainer(ctx, ctr)
 }
 
 func extractCDIDevices(s *specgen.SpecGenerator) []libpod.CtrCreateOption {
@@ -346,7 +357,6 @@ func createContainerOptions(ctx context.Context, rt *libpod.Runtime, s *specgen.
 			options = append(options, libpod.WithLogDriver(s.LogConfiguration.Driver))
 		}
 	}
-
 	// Security options
 	if len(s.SelinuxOpts) > 0 {
 		options = append(options, libpod.WithSecLabels(s.SelinuxOpts))

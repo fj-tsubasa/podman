@@ -34,7 +34,7 @@ const headerTemplate = `# {{{{.ServiceName}}}}.service
 [Unit]
 Description=Podman {{{{.ServiceName}}}}.service
 Documentation=man:podman-generate-systemd(1)
-Wants=network.target
+Wants=network-online.target
 After=network-online.target
 RequiresMountsFor={{{{.RunRoot}}}}
 `
@@ -74,8 +74,7 @@ func filterCommonContainerFlags(command []string, argCount int) []string {
 		case s == "--sdnotify", s == "--cgroups":
 			i++
 			continue
-		case strings.HasPrefix(s, "--sdnotify="),
-			strings.HasPrefix(s, "--rm="),
+		case strings.HasPrefix(s, "--rm="),
 			strings.HasPrefix(s, "--cgroups="):
 			continue
 		}

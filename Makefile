@@ -25,12 +25,12 @@ export GOPROXY=https://proxy.golang.org
 GO ?= go
 COVERAGE_PATH ?= .coverage
 DESTDIR ?=
-EPOCH_TEST_COMMIT ?= $(shell git merge-base $${DEST_BRANCH:-master} HEAD)
+EPOCH_TEST_COMMIT ?= $(shell git merge-base $${DEST_BRANCH:-main} HEAD)
 HEAD ?= HEAD
 CHANGELOG_BASE ?= HEAD~
 CHANGELOG_TARGET ?= HEAD
 PROJECT := github.com/containers/podman
-GIT_BASE_BRANCH ?= origin/master
+GIT_BASE_BRANCH ?= origin/main
 GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 GIT_BRANCH_CLEAN ?= $(shell echo $(GIT_BRANCH) | sed -e "s/[^[:alnum:]]/-/g")
 LIBPOD_INSTANCE := libpod_dev
@@ -39,7 +39,7 @@ BINDIR ?= ${PREFIX}/bin
 LIBEXECDIR ?= ${PREFIX}/libexec
 MANDIR ?= ${PREFIX}/share/man
 SHAREDIR_CONTAINERS ?= ${PREFIX}/share/containers
-ETCDIR ?= /etc
+ETCDIR ?= ${PREFIX}/etc
 TMPFILESDIR ?= ${PREFIX}/lib/tmpfiles.d
 SYSTEMDDIR ?= ${PREFIX}/lib/systemd/system
 USERSYSTEMDDIR ?= ${PREFIX}/lib/systemd/user
@@ -90,8 +90,7 @@ else
 	ISODATE ?= $(shell date --iso-8601)
 endif
 LIBPOD := ${PROJECT}/v3/libpod
-GCFLAGS ?= all=-trimpath=$(CURDIR)
-ASMFLAGS ?= all=-trimpath=$(CURDIR)
+GOFLAGS ?= -trimpath
 LDFLAGS_PODMAN ?= \
 	-X $(LIBPOD)/define.gitCommit=$(GIT_COMMIT) \
 	-X $(LIBPOD)/define.buildInfo=$(BUILD_INFO) \
@@ -214,7 +213,7 @@ endif
 .PHONY: .gitvalidation
 .gitvalidation: .gopathok
 	@echo "Validating vs commit '$(call err_if_empty,EPOCH_TEST_COMMIT)'"
-	GIT_CHECK_EXCLUDE="./vendor:docs/make.bat" $(GOBIN)/git-validation -run DCO,short-subject,dangling-whitespace -range $(EPOCH_TEST_COMMIT)..$(HEAD)
+	GIT_CHECK_EXCLUDE="./vendor:docs/make.bat:test/buildah-bud/buildah-tests.diff" $(GOBIN)/git-validation -run DCO,short-subject,dangling-whitespace -range $(EPOCH_TEST_COMMIT)..$(HEAD)
 
 .PHONY: lint
 lint: golangci-lint
@@ -258,10 +257,10 @@ test/goecho/goecho: .gopathok $(wildcard test/goecho/*.go)
 
 .PHONY: codespell
 codespell:
-	codespell -S bin,vendor,.git,go.sum,changelog.txt,.cirrus.yml,"RELEASE_NOTES.md,*.xz,*.gz,*.tar,*.tgz,bin2img,*ico,*.png,*.1,*.5,copyimg,*.orig,apidoc.go" -L uint,iff,od,seeked,splitted,marge,ERRO,hist,ether -w
+	codespell -S bin,vendor,.git,go.sum,changelog.txt,.cirrus.yml,"RELEASE_NOTES.md,*.xz,*.gz,*.ps1,*.tar,*.tgz,bin2img,*ico,*.png,*.1,*.5,copyimg,*.orig,apidoc.go" -L uint,iff,od,seeked,splitted,marge,ERRO,hist,ether -w
 
 .PHONY: validate
-validate: gofmt lint .gitvalidation validate.completions man-page-check swagger-check tests-included
+validate: gofmt lint .gitvalidation validate.completions man-page-check swagger-check tests-included tests-expect-exit
 
 .PHONY: build-all-new-commits
 build-all-new-commits:
@@ -295,8 +294,6 @@ endif
 	CGO_ENABLED=$(CGO_ENABLED) \
 		$(GO) build \
 		$(BUILDFLAGS) \
-		-gcflags '$(GCFLAGS)' \
-		-asmflags '$(ASMFLAGS)' \
 		-ldflags '$(LDFLAGS_PODMAN)' \
 		-tags "$(BUILDTAGS)" \
 		-o $@ ./cmd/podman
@@ -310,8 +307,6 @@ $(SRCBINDIR)/podman$(BINSFX): $(SRCBINDIR) .gopathok $(SOURCES) go.mod go.sum
 		GOOS=$(GOOS) \
 		$(GO) build \
 		$(BUILDFLAGS) \
-		-gcflags '$(GCFLAGS)' \
-		-asmflags '$(ASMFLAGS)' \
 		-ldflags '$(LDFLAGS_PODMAN)' \
 		-tags "${REMOTETAGS}" \
 		-o $@ ./cmd/podman
@@ -321,8 +316,6 @@ $(SRCBINDIR)/podman-remote-static: $(SRCBINDIR) .gopathok $(SOURCES) go.mod go.s
 		GOOS=$(GOOS) \
 		$(GO) build \
 		$(BUILDFLAGS) \
-		-gcflags '$(GCFLAGS)' \
-		-asmflags '$(ASMFLAGS)' \
 		-ldflags '$(LDFLAGS_PODMAN_STATIC)' \
 		-tags "${REMOTETAGS}" \
 		-o $@ ./cmd/podman
@@ -376,8 +369,6 @@ bin/podman.cross.%: .gopathok
 	CGO_ENABLED=0 \
 		$(GO) build \
 		$(BUILDFLAGS) \
-		-gcflags '$(GCFLAGS)' \
-		-asmflags '$(ASMFLAGS)' \
 		-ldflags '$(LDFLAGS_PODMAN)' \
 		-tags '$(BUILDTAGS_CROSS)' \
 		-o "$@" ./cmd/podman
@@ -502,10 +493,12 @@ validate.completions:
 	if [ -x /bin/zsh ]; then /bin/zsh completions/zsh/_podman; fi
 	if [ -x /bin/fish ]; then /bin/fish completions/fish/podman.fish; fi
 
+# Note: Assumes test/python/requirements.txt is installed & available
 .PHONY: run-docker-py-tests
 run-docker-py-tests:
-	$(eval testLogs=$(shell mktemp podman_tmp_XXXX))
-	./bin/podman run --rm --security-opt label=disable --privileged -v $(testLogs):/testLogs --net=host -e DOCKER_HOST=tcp://localhost:8080 $(DOCKERPY_IMAGE) sh -c "pytest $(DOCKERPY_TEST) "
+	touch test/__init__.py
+	pytest test/python/docker/
+	-rm test/__init__.py
 
 .PHONY: localunit
 localunit: test/goecho/goecho
@@ -605,6 +598,16 @@ test-binaries: test/checkseccomp/checkseccomp test/goecho/goecho install.cataton
 tests-included:
 	contrib/cirrus/pr-should-include-tests
 
+.PHONY: tests-expect-exit
+tests-expect-exit:
+	@if egrep --line-number 'Expect.*ExitCode' test/e2e/*.go | egrep -v ', ".*"\)'; then \
+		echo "^^^ Unhelpful use of Expect(ExitCode())"; \
+		echo "   Please use '.Should(Exit(...))' pattern instead."; \
+		echo "   If that's not possible, please add an annotation (description) to your assertion:"; \
+		echo "        Expect(...).To(..., \"Friendly explanation of this check\")"; \
+		exit 1; \
+	fi
+
 ###
 ### Release/Packaging targets
 ###
@@ -613,7 +616,7 @@ podman-release.tar.gz: binaries docs  ## Build all binaries, docs., and installa
 	$(eval TMPDIR := $(shell mktemp -d podman_tmp_XXXX))
 	$(eval SUBDIR := podman-v$(RELEASE_NUMBER))
 	mkdir -p "$(TMPDIR)/$(SUBDIR)"
-	$(MAKE) install.bin install.man install.cni \
+	$(MAKE) install.bin install.man \
 		install.systemd "DESTDIR=$(TMPDIR)/$(SUBDIR)" "PREFIX=/usr"
 	tar -czvf $@ --xattrs -C "$(TMPDIR)" "./$(SUBDIR)"
 	-rm -rf "$(TMPDIR)"
@@ -666,7 +669,7 @@ package-install: package  ## Install rpm packages
 	/usr/bin/podman info  # will catch a broken conmon
 
 .PHONY: install
-install: .gopathok install.bin install.remote install.man install.cni install.systemd  ## Install binaries to system locations
+install: .gopathok install.bin install.remote install.man install.systemd  ## Install binaries to system locations
 
 .PHONY: install.catatonit
 install.catatonit:
@@ -718,11 +721,6 @@ install.completions:
 	install ${SELINUXOPT} -m 644 completions/fish/podman.fish ${DESTDIR}${FISHINSTALLDIR}
 	install ${SELINUXOPT} -m 644 completions/fish/podman-remote.fish ${DESTDIR}${FISHINSTALLDIR}
 	# There is no common location for powershell files so do not install them. Users have to source the file from their powershell profile.
-
-.PHONY: install.cni
-install.cni:
-	install ${SELINUXOPT} -d -m 755 ${DESTDIR}${ETCDIR}/cni/net.d/
-	install ${SELINUXOPT} -m 644 cni/87-podman-bridge.conflist ${DESTDIR}${ETCDIR}/cni/net.d/87-podman-bridge.conflist
 
 .PHONY: install.docker
 install.docker:
@@ -845,11 +843,13 @@ clean: ## Clean all make artifacts
 		build \
 		test/checkseccomp/checkseccomp \
 		test/goecho/goecho \
+		test/__init__.py \
 		test/testdata/redis-image \
 		libpod/container_ffjson.go \
 		libpod/pod_ffjson.go \
 		libpod/container_easyjson.go \
 		libpod/pod_easyjson.go \
 		.install.goimports \
-		docs/build
+		docs/build \
+		venv
 	make -C docs clean

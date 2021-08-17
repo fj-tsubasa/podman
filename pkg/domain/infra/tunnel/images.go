@@ -107,7 +107,7 @@ func (ir *ImageEngine) Pull(ctx context.Context, rawImage string, opts entities.
 	options := new(images.PullOptions)
 	options.WithAllTags(opts.AllTags).WithAuthfile(opts.Authfile).WithArch(opts.Arch).WithOS(opts.OS)
 	options.WithVariant(opts.Variant).WithPassword(opts.Password)
-	options.WithQuiet(opts.Quiet).WithUsername(opts.Username)
+	options.WithQuiet(opts.Quiet).WithUsername(opts.Username).WithPolicy(opts.PullPolicy.String())
 	if s := opts.SkipTLSVerify; s != types.OptionalBoolUndefined {
 		if s == types.OptionalBoolTrue {
 			options.WithSkipTLSVerify(true)
@@ -297,16 +297,6 @@ func (ir *ImageEngine) Save(ctx context.Context, nameOrID string, tags []string,
 		return err
 	}
 	return utils2.UntarToFileSystem(opts.Output, f, nil)
-}
-
-// Diff reports the changes to the given image
-func (ir *ImageEngine) Diff(ctx context.Context, nameOrID string, _ entities.DiffOptions) (*entities.DiffReport, error) {
-	options := new(images.DiffOptions)
-	changes, err := images.Diff(ir.ClientCtx, nameOrID, options)
-	if err != nil {
-		return nil, err
-	}
-	return &entities.DiffReport{Changes: changes}, nil
 }
 
 func (ir *ImageEngine) Search(ctx context.Context, term string, opts entities.ImageSearchOptions) ([]entities.ImageSearchReport, error) {

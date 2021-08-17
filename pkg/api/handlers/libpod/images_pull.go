@@ -26,14 +26,17 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 	runtime := r.Context().Value("runtime").(*libpod.Runtime)
 	decoder := r.Context().Value("decoder").(*schema.Decoder)
 	query := struct {
-		Reference string `schema:"reference"`
-		OS        string `schema:"OS"`
-		Arch      string `schema:"Arch"`
-		Variant   string `schema:"Variant"`
-		TLSVerify bool   `schema:"tlsVerify"`
-		AllTags   bool   `schema:"allTags"`
+		Reference  string `schema:"reference"`
+		OS         string `schema:"OS"`
+		Arch       string `schema:"Arch"`
+		Variant    string `schema:"Variant"`
+		TLSVerify  bool   `schema:"tlsVerify"`
+		AllTags    bool   `schema:"allTags"`
+		PullPolicy string `schema:"policy"`
+		Quiet      bool   `schema:"quiet"`
 	}{
-		TLSVerify: true,
+		TLSVerify:  true,
+		PullPolicy: "always",
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
@@ -83,12 +86,18 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 
 	pullOptions.Writer = writer
 
+	pullPolicy, err := config.ParsePullPolicy(query.PullPolicy)
+	if err != nil {
+		utils.Error(w, "failed to parse pull policy", http.StatusBadRequest, err)
+		return
+	}
+
 	var pulledImages []*libimage.Image
 	var pullError error
 	runCtx, cancel := context.WithCancel(r.Context())
 	go func() {
 		defer cancel()
-		pulledImages, pullError = runtime.LibimageRuntime().Pull(runCtx, query.Reference, config.PullPolicyAlways, pullOptions)
+		pulledImages, pullError = runtime.LibimageRuntime().Pull(runCtx, query.Reference, pullPolicy, pullOptions)
 	}()
 
 	flush := func() {
@@ -108,8 +117,10 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 		select {
 		case s := <-writer.Chan():
 			report.Stream = string(s)
-			if err := enc.Encode(report); err != nil {
-				logrus.Warnf("Failed to encode json: %v", err)
+			if !query.Quiet {
+				if err := enc.Encode(report); err != nil {
+					logrus.Warnf("Failed to encode json: %v", err)
+				}
 			}
 			flush()
 		case <-runCtx.Done():

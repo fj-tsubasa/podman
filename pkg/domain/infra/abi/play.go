@@ -182,20 +182,22 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		return nil, err
 	}
 	if options.Network != "" {
-		switch strings.ToLower(options.Network) {
-		case "bridge", "host":
+		ns, cniNets, netOpts, err := specgen.ParseNetworkString(options.Network)
+		if err != nil {
+			return nil, err
+		}
+
+		if (ns.IsBridge() && len(cniNets) == 0) || ns.IsHost() {
 			return nil, errors.Errorf("invalid value passed to --network: bridge or host networking must be configured in YAML")
-		case "":
-			return nil, errors.Errorf("invalid value passed to --network: must provide a comma-separated list of CNI networks")
-		default:
-			// We'll assume this is a comma-separated list of CNI
-			// networks.
-			networks := strings.Split(options.Network, ",")
-			logrus.Debugf("Pod joining CNI networks: %v", networks)
-			p.NetNS.NSMode = specgen.Bridge
-			p.CNINetworks = append(p.CNINetworks, networks...)
+		}
+		logrus.Debugf("Pod %q joining CNI networks: %v", podName, cniNets)
+		p.NetNS.NSMode = specgen.Bridge
+		p.CNINetworks = append(p.CNINetworks, cniNets...)
+		if len(netOpts) > 0 {
+			p.NetworkOptions = netOpts
 		}
 	}
+
 	if len(options.StaticIPs) > *ipIndex {
 		p.StaticIP = &options.StaticIPs[*ipIndex]
 	} else if len(options.StaticIPs) > 0 {
@@ -275,7 +277,10 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		// registry on localhost.
 		pullPolicy := config.PullPolicyNewer
 		if len(container.ImagePullPolicy) > 0 {
-			pullPolicy, err = config.ParsePullPolicy(string(container.ImagePullPolicy))
+			// Make sure to lower the strings since K8s pull policy
+			// may be capitalized (see bugzilla.redhat.com/show_bug.cgi?id=1985905).
+			rawPolicy := string(container.ImagePullPolicy)
+			pullPolicy, err = config.ParsePullPolicy(strings.ToLower(rawPolicy))
 			if err != nil {
 				return nil, err
 			}

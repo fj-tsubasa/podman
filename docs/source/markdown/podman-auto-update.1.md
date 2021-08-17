@@ -9,8 +9,7 @@ podman\-auto-update - Auto update containers according to their auto-update poli
 ## DESCRIPTION
 **podman auto-update** looks up containers with a specified `io.containers.autoupdate` label (i.e., the auto-update policy).
 
-If the label is present and set to `registry`, Podman reaches out to the corresponding registry to check if the image has been updated.
-The label `image` is an alternative to `registry` maintained for backwards compatibility.
+If the label is present and set to `registry`, Podman reaches out to the corresponding registry to check if the image has been updated. The label `image` is an alternative to `registry` maintained for backwards compatibility.
 An image is considered updated if the digest in the local storage is different than the one of the remote image.
 If an image must be updated, Podman pulls it down and restarts the systemd unit executing the container.
 
@@ -35,7 +34,6 @@ Systemd units that start and stop a container cannot run a new image.
 Podman ships with a `podman-auto-update.service` systemd unit. This unit is triggered daily at midnight by the `podman-auto-update.timer` systemd timer.  The timer can be altered for custom time-based updates if desired.  The unit can further be invoked by other systemd units (e.g., via the dependency tree) or manually via **systemctl start podman-auto-update.service**.
 
 ## OPTIONS
-
 #### **--authfile**=*path*
 
 Path of the authentication file. Default is `${XDG_RUNTIME_DIR}/containers/auth.json`, which is set using **[podman login](podman-login.1.md)**.
@@ -43,34 +41,68 @@ If the authorization state is not found there, `$HOME/.docker/config.json` is ch
 
 Note: There is also the option to override the default path of the authentication file by setting the `REGISTRY_AUTH_FILE` environment variable. This can be done with **export REGISTRY_AUTH_FILE=_path_**.
 
-## EXAMPLES
+#### **--dry-run**=*true|false*
 
+Check for the availability of new images but do not perform any pull operation or restart any service or container.
+The `UPDATED` field indicates the availability of a new image with "pending".
+
+#### **--format**=*format*
+
+Change the default output format.  This can be of a supported type like 'json' or a Go template.
+Valid placeholders for the Go template are listed below:
+
+#### **--rollback**=*true|false*
+
+If restarting a systemd unit after updating the image has failed, rollback to using the previous image and restart the unit another time.  Default is true.
+
+Please note that detecting if a systemd unit has failed is best done by the container sending the READY message via SDNOTIFY.  This way, restarting the unit will wait until having received the message or a timeout kicked in.  Without that, restarting the systemd unit may succeed even if the container has failed shortly after.
+
+For a container to send the READY message via SDNOTIFY it must be created with the `--sdnotify=container` option (see podman-run(1)).  The application running inside the container can then execute `systemd-notify --ready` when ready or use the sdnotify bindings of the specific programming language (e.g., sd_notify(3)).
+
+
+| **Placeholder** | **Description**                        |
+| --------------- | -------------------------------------- |
+| .Unit           | Name of the systemd unit               |
+| .ContainerName  | Name of the container                  |
+| .ContainerID    | ID of the container                    |
+| .Container      | ID and name of the container           |
+| .Image          | Name of the image                      |
+| .Policy         | Auto-update policy of the container    |
+| .Updated        | Update status: true,false,failed       |
+
+
+## EXAMPLES
 Autoupdate with registry policy
 
 ```
 ### Start a container
 $ podman run --label "io.containers.autoupdate=registry" \
     --label "io.containers.autoupdate.authfile=/some/authfile.json" \
-    -d busybox:latest top
+    -d --name=test registry.fedoraproject.org/fedora:latest sleep infinity
 bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d
 
 ### Generate a systemd unit for this container
 $ podman generate systemd --new --files bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d
-/home/user/containers/libpod/container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service
+/home/user/container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service
 
 ### Load the new systemd unit and start it
-$ mv ./container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service ~/.config/systemd/user
+$ mv ./container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service ~/.config/systemd/user/container-test.service
 $ systemctl --user daemon-reload
 
 ### If the previously created containers or pods are using shared resources, such as ports, make sure to remove them before starting the generated systemd units.
 $ podman stop bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d
 $ podman rm bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d
 
-$ systemctl --user start container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service
+$ systemctl --user start container-test.service
 
-### Auto-update the container
+### Check if a newer image is available
+$ podman auto-update --dry-run --format "{{.Image}} {{.Updated}}"
+registry.fedoraproject.org/fedora:latest   pending
+
+### Autoupdate the services
 $ podman auto-update
-container-bc219740a210455fa27deacc96d50a9e20516492f1417507c13ce1533dbdcd9d.service
+UNIT                    CONTAINER            IMAGE                                     POLICY      UPDATED
+container-test.service  08fd34e533fd (test)  registry.fedoraproject.org/fedora:latest  registry    false
 ```
 
 Autoupdate with local policy
@@ -83,7 +115,7 @@ be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338
 
 ### Generate a systemd unit for this container
 $ podman generate systemd --new --files be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338
-/home/user/containers/libpod/container-be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338.service
+/home/user/container-be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338.service
 
 ### Load the new systemd unit and start it
 $ mv ./container-be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338.service ~/.config/systemd/user
@@ -105,8 +137,8 @@ $ podman commit --change CMD=/bin/bash inspiring_galileo busybox:latest
 
 ### Auto-update the container
 $ podman auto-update
-container-be0889fd06f252a2e5141b37072c6bada68563026cb2b2649f53394d87ccc338.service
+[...]
 ```
 
 ## SEE ALSO
-**[podman(1)](podman.1.md)**, **[podman-generate-systemd(1)](podman-generate-systemd.1.md)**, **[podman-run(1)](podman-run.1.md)**, systemd.unit(5)
+**[podman(1)](podman.1.md)**, **[podman-generate-systemd(1)](podman-generate-systemd.1.md)**, **[podman-run(1)](podman-run.1.md)**, sd_notify(3), systemd.unit(5)

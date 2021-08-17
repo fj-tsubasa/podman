@@ -367,6 +367,12 @@ func (c *Container) setupStorageMapping(dest, from *storage.IDMappingOptions) {
 		return
 	}
 	*dest = *from
+	// If we are creating a container inside a pod, we always want to inherit the
+	// userns settings from the infra container. So clear the auto userns settings
+	// so that we don't request storage for a new uid/gid map.
+	if c.PodID() != "" && !c.IsInfra() {
+		dest.AutoUserNs = false
+	}
 	if dest.AutoUserNs {
 		overrides := c.getUserOverrides()
 		dest.AutoUserNsOpts.PasswdFile = overrides.ContainerEtcPasswdPath
@@ -420,7 +426,6 @@ func (c *Container) setupStorage(ctx context.Context) error {
 	if c.config.Rootfs == "" && (c.config.RootfsImageID == "" || c.config.RootfsImageName == "") {
 		return errors.Wrapf(define.ErrInvalidArg, "must provide image ID and image name to use an image")
 	}
-
 	options := storage.ContainerOptions{
 		IDMappingOptions: storage.IDMappingOptions{
 			HostUIDMapping: true,
@@ -473,20 +478,10 @@ func (c *Container) setupStorage(ctx context.Context) error {
 	c.config.IDMappings.UIDMap = containerInfo.UIDMap
 	c.config.IDMappings.GIDMap = containerInfo.GIDMap
 
-	processLabel := containerInfo.ProcessLabel
-	switch {
-	case c.ociRuntime.SupportsKVM():
-		processLabel, err = selinux.KVMLabel(processLabel)
-		if err != nil {
-			return err
-		}
-	case c.config.Systemd:
-		processLabel, err = selinux.InitLabel(processLabel)
-		if err != nil {
-			return err
-		}
+	processLabel, err := c.processLabel(containerInfo.ProcessLabel)
+	if err != nil {
+		return err
 	}
-
 	c.config.ProcessLabel = processLabel
 	c.config.MountLabel = containerInfo.MountLabel
 	c.config.StaticDir = containerInfo.Dir
@@ -519,6 +514,26 @@ func (c *Container) setupStorage(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Container) processLabel(processLabel string) (string, error) {
+	if !c.config.Systemd && !c.ociRuntime.SupportsKVM() {
+		return processLabel, nil
+	}
+	ctrSpec, err := c.specFromState()
+	if err != nil {
+		return "", err
+	}
+	label, ok := ctrSpec.Annotations[define.InspectAnnotationLabel]
+	if !ok || !strings.Contains(label, "type:") {
+		switch {
+		case c.ociRuntime.SupportsKVM():
+			return selinux.KVMLabel(processLabel)
+		case c.config.Systemd:
+			return selinux.InitLabel(processLabel)
+		}
+	}
+	return processLabel, nil
 }
 
 // Tear down a container's storage prior to removal
@@ -1535,7 +1550,7 @@ func (c *Container) mountStorage() (_ string, deferredErr error) {
 	// If /etc/mtab does not exist in container image, then we need to
 	// create it, so that mount command within the container will work.
 	mtab := filepath.Join(mountPoint, "/etc/mtab")
-	if err := os.MkdirAll(filepath.Dir(mtab), 0755); err != nil {
+	if err := idtools.MkdirAllAs(filepath.Dir(mtab), 0755, c.RootUID(), c.RootGID()); err != nil {
 		return "", errors.Wrap(err, "error creating mtab directory")
 	}
 	if err = os.Symlink("/proc/mounts", mtab); err != nil && !os.IsExist(err) {

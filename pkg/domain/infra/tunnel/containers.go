@@ -63,19 +63,27 @@ func (ic *ContainerEngine) ContainerPause(ctx context.Context, namesOrIds []stri
 	reports := make([]*entities.PauseUnpauseReport, 0, len(ctrs))
 	for _, c := range ctrs {
 		err := containers.Pause(ic.ClientCtx, c.ID, nil)
+		if err != nil && options.All && errors.Cause(err).Error() == define.ErrCtrStateInvalid.Error() {
+			logrus.Debugf("Container %s is not running", c.ID)
+			continue
+		}
 		reports = append(reports, &entities.PauseUnpauseReport{Id: c.ID, Err: err})
 	}
 	return reports, nil
 }
 
 func (ic *ContainerEngine) ContainerUnpause(ctx context.Context, namesOrIds []string, options entities.PauseUnPauseOptions) ([]*entities.PauseUnpauseReport, error) {
+	reports := []*entities.PauseUnpauseReport{}
 	ctrs, err := getContainersByContext(ic.ClientCtx, options.All, false, namesOrIds)
 	if err != nil {
 		return nil, err
 	}
-	reports := make([]*entities.PauseUnpauseReport, 0, len(ctrs))
 	for _, c := range ctrs {
 		err := containers.Unpause(ic.ClientCtx, c.ID, nil)
+		if err != nil && options.All && errors.Cause(err).Error() == define.ErrCtrStateInvalid.Error() {
+			logrus.Debugf("Container %s is not paused", c.ID)
+			continue
+		}
 		reports = append(reports, &entities.PauseUnpauseReport{Id: c.ID, Err: err})
 	}
 	return reports, nil
@@ -136,9 +144,14 @@ func (ic *ContainerEngine) ContainerKill(ctx context.Context, namesOrIds []strin
 	options := new(containers.KillOptions).WithSignal(opts.Signal)
 	reports := make([]*entities.KillReport, 0, len(ctrs))
 	for _, c := range ctrs {
+		err := containers.Kill(ic.ClientCtx, c.ID, options)
+		if err != nil && opts.All && errors.Cause(err).Error() == define.ErrCtrStateInvalid.Error() {
+			logrus.Debugf("Container %s is not running", c.ID)
+			continue
+		}
 		reports = append(reports, &entities.KillReport{
 			Id:       c.ID,
-			Err:      containers.Kill(ic.ClientCtx, c.ID, options),
+			Err:      err,
 			RawInput: ctrMap[c.ID],
 		})
 	}
@@ -369,10 +382,11 @@ func (ic *ContainerEngine) ContainerCreate(ctx context.Context, s *specgen.SpecG
 
 func (ic *ContainerEngine) ContainerLogs(_ context.Context, nameOrIDs []string, opts entities.ContainerLogsOptions) error {
 	since := opts.Since.Format(time.RFC3339)
+	until := opts.Until.Format(time.RFC3339)
 	tail := strconv.FormatInt(opts.Tail, 10)
 	stdout := opts.StdoutWriter != nil
 	stderr := opts.StderrWriter != nil
-	options := new(containers.LogOptions).WithFollow(opts.Follow).WithSince(since).WithStderr(stderr)
+	options := new(containers.LogOptions).WithFollow(opts.Follow).WithSince(since).WithUntil(until).WithStderr(stderr)
 	options.WithStdout(stdout).WithTail(tail)
 
 	var err error
@@ -541,6 +555,17 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 		return nil, err
 	}
 	removeOptions := new(containers.RemoveOptions).WithVolumes(true).WithForce(false)
+	removeContainer := func(id string) {
+		if err := containers.Remove(ic.ClientCtx, id, removeOptions); err != nil {
+			if errorhandling.Contains(err, define.ErrNoSuchCtr) ||
+				errorhandling.Contains(err, define.ErrCtrRemoved) {
+				logrus.Debugf("Container %s does not exist: %v", id, err)
+			} else {
+				logrus.Errorf("Error removing container %s: %v", id, err)
+			}
+		}
+	}
+
 	// There can only be one container if attach was used
 	for i, ctr := range ctrs {
 		name := ctr.ID
@@ -568,6 +593,9 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 			}
 
 			if err != nil {
+				if ctr.AutoRemove {
+					removeContainer(ctr.ID)
+				}
 				report.ExitCode = define.ExitCode(report.Err)
 				report.Err = err
 				reports = append(reports, &report)
@@ -582,16 +610,10 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 						logrus.Errorf("Failed to check if %s should restart: %v", ctr.ID, err)
 						return
 					}
+					logrus.Errorf("Should restart: %v", shouldRestart)
 
-					if !shouldRestart {
-						if err := containers.Remove(ic.ClientCtx, ctr.ID, removeOptions); err != nil {
-							if errorhandling.Contains(err, define.ErrNoSuchCtr) ||
-								errorhandling.Contains(err, define.ErrCtrRemoved) {
-								logrus.Debugf("Container %s does not exist: %v", ctr.ID, err)
-							} else {
-								logrus.Errorf("Error removing container %s: %v", ctr.ID, err)
-							}
-						}
+					if !shouldRestart && ctr.AutoRemove {
+						removeContainer(ctr.ID)
 					}
 				}()
 			}
@@ -643,6 +665,12 @@ func (ic *ContainerEngine) ContainerStart(ctx context.Context, namesOrIds []stri
 func (ic *ContainerEngine) ContainerList(ctx context.Context, opts entities.ContainerListOptions) ([]entities.ListContainer, error) {
 	options := new(containers.ListOptions).WithFilters(opts.Filters).WithAll(opts.All).WithLast(opts.Last)
 	options.WithNamespace(opts.Namespace).WithSize(opts.Size).WithSync(opts.Sync).WithExternal(opts.External)
+	return containers.List(ic.ClientCtx, options)
+}
+
+func (ic *ContainerEngine) ContainerListExternal(ctx context.Context) ([]entities.ListContainer, error) {
+	options := new(containers.ListOptions).WithAll(true)
+	options.WithNamespace(true).WithSize(true).WithSync(true).WithExternal(true)
 	return containers.List(ic.ClientCtx, options)
 }
 
@@ -759,8 +787,18 @@ func (ic *ContainerEngine) ContainerRun(ctx context.Context, opts entities.Conta
 	return &report, err
 }
 
-func (ic *ContainerEngine) ContainerDiff(ctx context.Context, nameOrID string, _ entities.DiffOptions) (*entities.DiffReport, error) {
-	changes, err := containers.Diff(ic.ClientCtx, nameOrID, nil)
+func (ic *ContainerEngine) Diff(ctx context.Context, namesOrIDs []string, opts entities.DiffOptions) (*entities.DiffReport, error) {
+	var base string
+	options := new(containers.DiffOptions).WithDiffType(opts.Type.String())
+	if len(namesOrIDs) > 0 {
+		base = namesOrIDs[0]
+		if len(namesOrIDs) > 1 {
+			options.WithParent(namesOrIDs[1])
+		}
+	} else {
+		return nil, errors.New("no arguments for diff")
+	}
+	changes, err := containers.Diff(ic.ClientCtx, base, options)
 	return &entities.DiffReport{Changes: changes}, err
 }
 
@@ -827,8 +865,9 @@ func (ic *ContainerEngine) ContainerPort(ctx context.Context, nameOrID string, o
 	return reports, nil
 }
 
-func (ic *ContainerEngine) ContainerCopyFromArchive(ctx context.Context, nameOrID string, path string, reader io.Reader) (entities.ContainerCopyFunc, error) {
-	return containers.CopyFromArchive(ic.ClientCtx, nameOrID, path, reader)
+func (ic *ContainerEngine) ContainerCopyFromArchive(ctx context.Context, nameOrID, path string, reader io.Reader, options entities.CopyOptions) (entities.ContainerCopyFunc, error) {
+	copyOptions := new(containers.CopyOptions).WithChown(options.Chown).WithRename(options.Rename)
+	return containers.CopyFromArchiveWithOptions(ic.ClientCtx, nameOrID, path, reader, copyOptions)
 }
 
 func (ic *ContainerEngine) ContainerCopyToArchive(ctx context.Context, nameOrID string, path string, writer io.Writer) (entities.ContainerCopyFunc, error) {
@@ -847,7 +886,7 @@ func (ic *ContainerEngine) ContainerStats(ctx context.Context, namesOrIds []stri
 	if options.Latest {
 		return nil, errors.New("latest is not supported for the remote client")
 	}
-	return containers.Stats(ic.ClientCtx, namesOrIds, new(containers.StatsOptions).WithStream(options.Stream))
+	return containers.Stats(ic.ClientCtx, namesOrIds, new(containers.StatsOptions).WithStream(options.Stream).WithInterval(options.Interval))
 }
 
 // ShouldRestart reports back whether the container will restart

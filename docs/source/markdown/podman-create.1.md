@@ -181,6 +181,8 @@ Limit the CPU real-time period in microseconds
 
 Limit the container's Real Time CPU usage. This flag tell the kernel to restrict the container's Real Time CPU usage to the period you specify.
 
+This flag is not supported on cgroups V2 systems.
+
 #### **--cpu-rt-runtime**=*microseconds*
 
 Limit the CPU real-time runtime in microseconds
@@ -189,6 +191,8 @@ Limit the containers Real Time CPU usage. This flag tells the kernel to limit th
 Period of 1,000,000us and Runtime of 950,000us means that this container could consume 95% of available CPU and leave the remaining 5% to normal priority tasks.
 
 The sum of all runtimes across containers cannot exceed the amount allotted to the parent cgroup.
+
+This flag is not supported on cgroups V2 systems.
 
 #### **--cpu-shares**=*shares*
 
@@ -443,6 +447,20 @@ content that disappears when the container is stopped.
 
 Run an init inside the container that forwards signals and reaps processes.
 
+#### **--init-ctr**=*type* (pods only)
+
+When using pods, create an init style container, which is run after the infra container is started
+but before regular pod containers are started.  Init containers are useful for running
+setup operations for the pod's applications.
+
+Valid values for `init-ctr` type are *always* or *once*.  The *always* value
+means the container will run with each and every `pod start`, whereas the *once*
+value means the container will only run once when the pod is started and then the container is removed.
+
+Init containers are only run on pod `start`.  Restarting a pod will not execute any init
+containers should they be present.  Furthermore, init containers can only be created in a
+pod when that pod is not running.
+
 #### **--init-path**=*path*
 
 Path to the container-init binary.
@@ -478,6 +496,8 @@ is specified (not using `--kernel-memory`), the container's kernel memory
 is not limited. If you specify a limit, it may be rounded up to a multiple
 of the operating system's page size and the value can be very large,
 millions of trillions.
+
+This flag is not supported on cgroups V2 systems.
 
 #### **--label**, **-l**=*label*
 
@@ -561,6 +581,8 @@ unit, `b` is used. Set LIMIT to `-1` to enable unlimited swap.
 
 Tune a container's memory swappiness behavior. Accepts an integer between 0 and 100.
 
+This flag is not supported on cgroups V2 systems.
+
 #### **--mount**=*type=TYPE,TYPE-SPECIFIC-OPTION[,...]*
 
 Attach a filesystem mount to the container
@@ -638,15 +660,15 @@ Set the network mode for the container. Invalid if using **--dns**, **--dns-opt*
 
 Valid _mode_ values are:
 
-- **bridge**: create a network stack on the default bridge;
-- **none**: no networking;
-- **container:**_id_: reuse another container's network stack;
-- **host**: use the Podman host network stack. Note: the host mode gives the container full access to local system services such as D-bus and is therefore considered insecure;
-- _network-id_: connect to a user-defined network, multiple networks should be comma-separated;
-- **ns:**_path_: path to a network namespace to join;
-- **private**: create a new namespace for the container (default)
+- **bridge**: Create a network stack on the default bridge. This is the default for rootfull containers.
+- **none**: Create a network namespace for the container but do not configure network interfaces for it, thus the container has no network connectivity.
+- **container:**_id_: Reuse another container's network stack.
+- **host**: Do not create a network namespace, the container will use the host's network. Note: The host mode gives the container full access to local system services such as D-bus and is therefore considered insecure.
+- **network**: Connect to a user-defined network, multiple networks should be comma-separated.
+- **ns:**_path_: Path to a network namespace to join.
+- **private**: Create a new namespace for the container. This will use the **bridge** mode for rootfull containers and **slirp4netns** for rootless ones.
 - **slirp4netns[:OPTIONS,...]**: use **slirp4netns**(1) to create a user network stack. This is the default for rootless containers. It is possible to specify these additional options:
-  - **allow_host_loopback=true|false**: Allow the slirp4netns to reach the host loopback IP (`10.0.2.2`). Default is false.
+  - **allow_host_loopback=true|false**: Allow the slirp4netns to reach the host loopback IP (`10.0.2.2`, which is added to `/etc/hosts` as `host.containers.internal` for your convenience). Default is false.
   - **mtu=MTU**: Specify the MTU to use for this network. (Default is `65520`).
   - **cidr=CIDR**: Specify ip range to use for this network. (Default is `10.0.2.0/24`).
   - **enable_ipv6=true|false**: Enable IPv6. Default is false. (Required for `outbound_addr6`).
@@ -655,7 +677,8 @@ Valid _mode_ values are:
   - **outbound_addr6=INTERFACE**: Specify the outbound interface slirp should bind to (ipv6 traffic only).
   - **outbound_addr6=IPv6**: Specify the outbound ipv6 address slirp should bind to.
   - **port_handler=rootlesskit**: Use rootlesskit for port forwarding. Default.
-  - **port_handler=slirp4netns**: Use the slirp4netns port forwarding.
+  Note: Rootlesskit changes the source IP address of incoming packets to a IP address in the container network namespace, usually `10.0.2.100`. If your application requires the real source IP address, e.g. web server logs, use the slirp4netns port handler. The rootlesskit port handler is also used for rootless containers when connected to user-defined networks.
+  - **port_handler=slirp4netns**: Use the slirp4netns port forwarding, it is slower than rootlesskit but preserves the correct source IP address. This port handler cannot be used for user-defined networks.
 
 #### **--network-alias**=*alias*
 
@@ -682,6 +705,10 @@ Tune the host's OOM preferences for containers (accepts -1000 to 1000)
 
 #### **--os**=*OS*
 Override the OS, defaults to hosts, of the image to be pulled. For example, `windows`.
+
+#### **--personality**=*persona*
+
+Personality sets the execution domain via Linux personality(2).
 
 #### **--pid**=*pid*
 
@@ -858,7 +885,7 @@ Secrets and its storage are managed using the `podman secret` command.
 Secret Options
 
 - `type=mount|env`    : How the secret will be exposed to the container. Default mount.
-- `target=target`     : Target of secret. Defauts to secret name.
+- `target=target`     : Target of secret. Defaults to secret name.
 - `uid=0`             : UID of secret. Defaults to 0. Mount secret type only.
 - `gid=0`             : GID of secret. Defaults to 0. Mount secret type only.
 - `mode=0`            : Mode of secret. Defaults to 0444. Mount secret type only.
@@ -1086,14 +1113,28 @@ Set the user namespace mode for the container. It defaults to the **PODMAN_USERN
 
 Valid _mode_ values are:
 
-- **auto[:**_OPTIONS,..._**]**: automatically create a namespace. It is possible to specify these options to `auto`:
-  - **gidmapping=**_HOST_GID:CONTAINER_GID:SIZE_: to force a GID mapping to be present in the user namespace.
-  - **size=**_SIZE_: to specify an explicit size for the automatic user namespace. e.g. `--userns=auto:size=8192`. If `size` is not specified, `auto` will estimate a size for the user namespace.
-  - **uidmapping=**_HOST_UID:CONTAINER_UID:SIZE_: to force a UID mapping to be present in the user namespace.
-- **container:**_id_: join the user namespace of the specified container.
-- **host**: run in the user namespace of the caller. The processes running in the container will have the same privileges on the host as any other process launched by the calling user (default).
+**auto**[:_OPTIONS,..._]: automatically create a unique user namespace.
+
+The `--userns=auto` flag, requires that the user name `containers` and a range of subordinate user ids that the Podman container is allowed to use be specified in the /etc/subuid and /etc/subgid files.
+
+Example: `containers:2147483647:2147483648`.
+
+Podman allocates unique ranges of UIDs and GIDs from the `containers` subpordinate user ids. The size of the ranges is based on the number of UIDs required in the image. The number of UIDs and GIDs can be overridden with the `size` option. The `auto` options currently does not work in rootless mode
+
+  Valid `auto`options:
+
+  - *gidmapping*=_CONTAINER_GID:HOST_GID:SIZE_: to force a GID mapping to be present in the user namespace.
+  - *size*=_SIZE_: to specify an explicit size for the automatic user namespace. e.g. `--userns=auto:size=8192`. If `size` is not specified, `auto` will estimate a size for the user namespace.
+  - *uidmapping*=_CONTAINER_UID:HOST_UID:SIZE_: to force a UID mapping to be present in the user namespace.
+
+**container:**_id_: join the user namespace of the specified container.
+
+**host**: run in the user namespace of the caller. The processes running in the container will have the same privileges on the host as any other process launched by the calling user (default).
+
 - **keep-id**: creates a user namespace where the current rootless user's UID:GID are mapped to the same values in the container. This option is ignored for containers created by the root user.
+
 - **ns:**_namespace_: run the container in the given existing user namespace.
+
 - **private**: create a new namespace for the container.
 
 This option is incompatible with **--gidmap**, **--uidmap**, **--subuidname** and **--subgidname**.
@@ -1353,6 +1394,12 @@ the uids and gids from the host.
 $ podman create --uidmap 0:30000:7000 --gidmap 0:30000:7000 fedora echo hello
 ```
 
+### Setting automatic user namespace separated containers
+
+```
+# podman create --userns=auto:size=65536 ubi8-init
+```
+
 ### Configure timezone in a container
 
 ```
@@ -1384,6 +1431,12 @@ $ podman start --attach container3
 
 ```
 $ podman create -v /var/lib/design:/var/lib/design --group-add keep-groups ubi8
+```
+
+### Configure execution domain for containers using personality flag
+
+```
+$ podman create --name container1 --personaity=LINUX32 fedora bash
 ```
 
 ### Rootless Containers
@@ -1448,7 +1501,7 @@ NOTE: Use the environment variable `TMPDIR` to change the temporary storage loca
 
 ## SEE ALSO
 **podman**(1), **podman-secret**(1), **podman-save**(1), **podman-ps**(1), **podman-attach**(1), **podman-pod-create**(1), **podman-port**(1), **podman-start*(1), **podman-kill**(1), **podman-stop**(1),
-**podman-generate-systemd**(1) **podman-rm**(1), **subgid**(5), **subuid**(5), **containers.conf**(5), **systemd.unit**(5), **setsebool**(8), **slirp4netns**(1), **fuse-overlayfs**(1), **proc**(5), **conmon**(8).
+**podman-generate-systemd**(1) **podman-rm**(1), **subgid**(5), **subuid**(5), **containers.conf**(5), **systemd.unit**(5), **setsebool**(8), **slirp4netns**(1), **fuse-overlayfs**(1), **proc**(5), **conmon**(8), **personality**(2).
 
 ## HISTORY
 October 2017, converted from Docker documentation to Podman by Dan Walsh for Podman `<dwalsh@redhat.com>`

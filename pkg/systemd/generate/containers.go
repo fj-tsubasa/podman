@@ -160,16 +160,11 @@ func generateContainerInfo(ctr *libpod.Container, options entities.GenerateSyste
 
 	nameOrID, serviceName := containerServiceName(ctr, options)
 
-	store := ctr.Runtime().GetStore()
-	if store == nil {
-		return nil, errors.Errorf("could not determine storage store for container")
-	}
-
 	var runRoot string
 	if options.New {
 		runRoot = "%t/containers"
 	} else {
-		runRoot = store.RunRoot()
+		runRoot = ctr.Runtime().RunRoot()
 		if runRoot == "" {
 			return nil, errors.Errorf("could not lookup container's runroot: got empty string")
 		}
@@ -263,7 +258,6 @@ func executeContainerTemplate(info *containerInfo, options entities.GenerateSyst
 		}
 		startCommand = append(startCommand,
 			"run",
-			"--sdnotify=conmon",
 			"--cgroups=no-conmon",
 			"--rm",
 		)
@@ -278,6 +272,7 @@ func executeContainerTemplate(info *containerInfo, options entities.GenerateSyst
 		fs.String("name", "", "")
 		fs.Bool("replace", false, "")
 		fs.StringArrayP("env", "e", nil, "")
+		fs.String("sdnotify", "", "")
 		fs.Parse(remainingCmd)
 
 		remainingCmd = filterCommonContainerFlags(remainingCmd, fs.NArg())
@@ -297,6 +292,13 @@ func executeContainerTemplate(info *containerInfo, options entities.GenerateSyst
 		hasReplaceParam, err := fs.GetBool("replace")
 		if err != nil {
 			return "", err
+		}
+
+		// Default to --sdnotify=conmon unless already set by the
+		// container.
+		hasSdnotifyParam := fs.Lookup("sdnotify").Changed
+		if !hasSdnotifyParam {
+			startCommand = append(startCommand, "--sdnotify=conmon")
 		}
 
 		if !hasDetachParam {

@@ -6,7 +6,7 @@ env:
     #### Global variables used for all tasks
     ####
     # Name of the ultimate destination branch for this CI run, PR or post-merge.
-    DEST_BRANCH: "master"
+    DEST_BRANCH: "main"
     # Overrides default location (/tmp/cirrus) for repo clone
     GOPATH: &gopath "/var/tmp/go"
     GOBIN: "${GOPATH}/bin"
@@ -241,7 +241,12 @@ bindings_task:
     clone_script: *noop  # Comes from cache
     setup_script: *setup
     main_script: *main
-    always: *runner_stats
+    always: &html_artifacts
+        <<: *runner_stats
+        # Required for `contrib/cirrus/logformatter` to work properly
+        html_artifacts:
+            path: ./*.html
+            type: text/html
 
 
 # Build the "libpod" API documentation `swagger.yaml` and
@@ -373,8 +378,7 @@ osx_alt_build_task:
     always: *binary_artifacts
 
 
-# This task is a stub: In the future it will be used to verify
-# podman is compatible with the docker python-module.
+# Verify podman is compatible with the docker python-module.
 docker-py_test_task:
     name: Docker-py Compat.
     alias: docker-py_test
@@ -429,11 +433,7 @@ apiv2_test_task:
     setup_script: *setup
     main_script: *main
     always: &logs_artifacts
-        <<: *runner_stats
-        # Required for `contrib/cirrus/logformatter` to work properly
-        html_artifacts:
-            path: ./*.html
-            type: text/html
+        <<: *html_artifacts
         package_versions_script: '$SCRIPT_BASE/logcollector.sh packages'
         df_script: '$SCRIPT_BASE/logcollector.sh df'
         audit_log_script: '$SCRIPT_BASE/logcollector.sh audit'
@@ -601,7 +601,11 @@ buildah_bud_test_task:
         CTR_FQIN: ${FEDORA_CONTAINER_FQIN}
         # ID for re-use of build output
         _BUILD_CACHE_HANDLE: ${FEDORA_NAME}-build-${CIRRUS_BUILD_ID}
-        PODBIN_NAME: podman
+    matrix:
+        - env:
+            PODBIN_NAME: podman
+        - env:
+            PODBIN_NAME: remote
     gce_instance: *standardvm
     timeout_in: 45m
     clone_script: *noop

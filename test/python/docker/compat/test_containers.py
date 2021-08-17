@@ -1,12 +1,18 @@
+import io
 import subprocess
 import sys
 import time
 import unittest
+from typing import IO, Optional
 
 from docker import DockerClient, errors
+from docker.models.containers import Container
+from docker.models.images import Image
 
 from test.python.docker import Podman
 from test.python.docker.compat import common, constant
+
+import tarfile
 
 
 class TestContainers(unittest.TestCase):
@@ -134,7 +140,7 @@ class TestContainers(unittest.TestCase):
 
     def test_remove_container_without_force(self):
         # Validate current container count
-        self.assertTrue(len(self.client.containers.list()), 1)
+        self.assertEqual(len(self.client.containers.list()), 1)
 
         # Remove running container should throw error
         top = self.client.containers.get(TestContainers.topContainerId)
@@ -198,3 +204,50 @@ class TestContainers(unittest.TestCase):
         filters = {"name": "top"}
         ctnrs = self.client.containers.list(all=True, filters=filters)
         self.assertEqual(len(ctnrs), 1)
+
+    def test_copy_to_container(self):
+        ctr: Optional[Container] = None
+        try:
+            test_file_content = b"Hello World!"
+            ctr = self.client.containers.create(image="alpine", detach=True, command="top")
+            ctr.start()
+
+            buff: IO[bytes] = io.BytesIO()
+            with tarfile.open(fileobj=buff, mode="w:") as tf:
+                ti: tarfile.TarInfo = tarfile.TarInfo()
+                ti.uid = 1042
+                ti.gid = 1043
+                ti.name = "a.txt"
+                ti.path = "a.txt"
+                ti.mode = 0o644
+                ti.type = tarfile.REGTYPE
+                ti.size = len(test_file_content)
+                tf.addfile(ti, fileobj=io.BytesIO(test_file_content))
+
+            buff.seek(0)
+            ctr.put_archive("/tmp/", buff)
+            ret, out = ctr.exec_run(["stat", "-c", "%u:%g", "/tmp/a.txt"])
+
+            self.assertEqual(ret, 0)
+            self.assertEqual(out.rstrip(), b'1042:1043', "UID/GID of copied file")
+
+            ret, out = ctr.exec_run(["cat", "/tmp/a.txt"])
+            self.assertEqual(ret, 0)
+            self.assertEqual(out.rstrip(), test_file_content, "Content of copied file")
+        finally:
+            if ctr is not None:
+                ctr.stop()
+                ctr.remove()
+
+    def test_mount_preexisting_dir(self):
+        dockerfile = (B'FROM quay.io/libpod/alpine:latest\n'
+                      B'USER root\n'
+                      B'RUN mkdir -p /workspace\n'
+                      B'RUN chown 1042:1043 /workspace')
+        img: Image
+        img, out = self.client.images.build(fileobj=io.BytesIO(dockerfile))
+        ctr: Container = self.client.containers.create(image=img.id, detach=True, command="top",
+                                                       volumes=["test_mount_preexisting_dir_vol:/workspace"])
+        ctr.start()
+        ret, out = ctr.exec_run(["stat", "-c", "%u:%g", "/workspace"])
+        self.assertEqual(out.rstrip(), b'1042:1043', "UID/GID set in dockerfile")

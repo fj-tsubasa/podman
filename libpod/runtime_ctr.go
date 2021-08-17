@@ -47,6 +47,32 @@ func (r *Runtime) NewContainer(ctx context.Context, rSpec *spec.Spec, options ..
 	return r.newContainer(ctx, rSpec, options...)
 }
 
+func (r *Runtime) PrepareVolumeOnCreateContainer(ctx context.Context, ctr *Container) error {
+	// Copy the content from the underlying image into the newly created
+	// volume if configured to do so.
+	if !r.config.Containers.PrepareVolumeOnCreate {
+		return nil
+	}
+
+	defer func() {
+		if err := ctr.cleanupStorage(); err != nil {
+			logrus.Errorf("error cleaning up container storage %s: %v", ctr.ID(), err)
+		}
+	}()
+
+	mountPoint, err := ctr.mountStorage()
+	if err == nil {
+		// Finish up mountStorage
+		ctr.state.Mounted = true
+		ctr.state.Mountpoint = mountPoint
+		if err = ctr.save(); err != nil {
+			logrus.Errorf("Error saving container %s state: %v", ctr.ID(), err)
+		}
+	}
+
+	return err
+}
+
 // RestoreContainer re-creates a container from an imported checkpoint
 func (r *Runtime) RestoreContainer(ctx context.Context, rSpec *spec.Spec, config *ContainerConfig) (*Container, error) {
 	r.lock.Lock()
@@ -325,6 +351,10 @@ func (r *Runtime) setupContainer(ctx context.Context, ctr *Container) (_ *Contai
 		default:
 			return nil, errors.Wrapf(define.ErrInvalidArg, "unsupported CGroup manager: %s - cannot validate cgroup parent", r.config.Engine.CgroupManager)
 		}
+	}
+
+	if ctr.config.Timezone == "" {
+		ctr.config.Timezone = r.config.Containers.TZ
 	}
 
 	if ctr.restoreFromCheckpoint {
@@ -866,6 +896,18 @@ func (r *Runtime) LookupContainer(idOrName string) (*Container, error) {
 		return nil, define.ErrRuntimeStopped
 	}
 	return r.state.LookupContainer(idOrName)
+}
+
+// LookupContainerId looks up a container id by its name or a partial ID
+// If a partial ID is not unique, an error will be returned
+func (r *Runtime) LookupContainerID(idOrName string) (string, error) {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	if !r.valid {
+		return "", define.ErrRuntimeStopped
+	}
+	return r.state.LookupContainerID(idOrName)
 }
 
 // GetContainers retrieves all containers from the state

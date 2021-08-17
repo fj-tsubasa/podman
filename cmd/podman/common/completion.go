@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/containers/common/pkg/config"
+	"github.com/containers/image/v5/pkg/sysregistriesv2"
 	"github.com/containers/podman/v3/cmd/podman/registry"
 	"github.com/containers/podman/v3/libpod/define"
 	"github.com/containers/podman/v3/pkg/domain/entities"
 	"github.com/containers/podman/v3/pkg/network"
-	"github.com/containers/podman/v3/pkg/registries"
 	"github.com/containers/podman/v3/pkg/rootless"
 	systemdDefine "github.com/containers/podman/v3/pkg/systemd/define"
 	"github.com/containers/podman/v3/pkg/util"
@@ -46,7 +46,9 @@ func setupContainerEngine(cmd *cobra.Command) (entities.ContainerEngine, error) 
 		return nil, err
 	}
 	if !registry.IsRemote() && rootless.IsRootless() {
-		err := containerEngine.SetupRootless(registry.Context(), cmd)
+		_, noMoveProcess := cmd.Annotations[registry.NoMoveProcess]
+
+		err := containerEngine.SetupRootless(registry.Context(), noMoveProcess)
 		if err != nil {
 			return nil, err
 		}
@@ -236,7 +238,7 @@ func getSecrets(cmd *cobra.Command, toComplete string) ([]string, cobra.ShellCom
 }
 
 func getRegistries() ([]string, cobra.ShellCompDirective) {
-	regs, err := registries.GetRegistries()
+	regs, err := sysregistriesv2.UnqualifiedSearchRegistries(nil)
 	if err != nil {
 		cobra.CompErrorln(err.Error())
 		return nil, cobra.ShellCompDirectiveNoFileComp
@@ -317,6 +319,18 @@ func validCurrentCmdLine(cmd *cobra.Command, args []string, toComplete string) b
 func prefixSlice(pre string, slice []string) []string {
 	for i := range slice {
 		slice[i] = pre + slice[i]
+	}
+	return slice
+}
+
+func suffixCompSlice(suf string, slice []string) []string {
+	for i := range slice {
+		split := strings.SplitN(slice[i], "\t", 2)
+		if len(split) > 1 {
+			slice[i] = split[0] + suf + "\t" + split[1]
+		} else {
+			slice[i] = slice[i] + suf
+		}
 	}
 	return slice
 }
@@ -660,6 +674,42 @@ func AutocompleteSystemConnections(cmd *cobra.Command, args []string, toComplete
 	}
 
 	return suggestions, cobra.ShellCompDirectiveNoFileComp
+}
+
+// AutocompleteScp returns a list of connections, images, or both, depending on the amount of arguments
+func AutocompleteScp(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if !validCurrentCmdLine(cmd, args, toComplete) {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	switch len(args) {
+	case 0:
+		split := strings.SplitN(toComplete, "::", 2)
+		if len(split) > 1 {
+			imageSuggestions, _ := getImages(cmd, split[1])
+			return prefixSlice(split[0]+"::", imageSuggestions), cobra.ShellCompDirectiveNoFileComp
+		}
+		connectionSuggestions, _ := AutocompleteSystemConnections(cmd, args, toComplete)
+		imageSuggestions, _ := getImages(cmd, toComplete)
+		totalSuggestions := append(suffixCompSlice("::", connectionSuggestions), imageSuggestions...)
+		directive := cobra.ShellCompDirectiveNoFileComp
+		// if we have connections do not add a space after the completion
+		if len(connectionSuggestions) > 0 {
+			directive = cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
+		}
+		return totalSuggestions, directive
+	case 1:
+		split := strings.SplitN(args[0], "::", 2)
+		if len(split) > 1 {
+			if len(split[1]) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			imageSuggestions, _ := getImages(cmd, toComplete)
+			return imageSuggestions, cobra.ShellCompDirectiveNoFileComp
+		}
+		connectionSuggestions, _ := AutocompleteSystemConnections(cmd, args, toComplete)
+		return suffixCompSlice("::", connectionSuggestions), cobra.ShellCompDirectiveNoFileComp
+	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }
 
 /* -------------- Flags ----------------- */

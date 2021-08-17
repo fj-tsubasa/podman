@@ -19,7 +19,7 @@ The container command allows you to manage containers
 | commit     | [podman-commit(1)](podman-commit.1.md)              | Create new image based on the changed container.                             |
 | cp         | [podman-cp(1)](podman-cp.1.md)                      | Copy files/folders between a container and the local filesystem.             |
 | create     | [podman-create(1)](podman-create.1.md)              | Create a new container.                                                      |
-| diff       | [podman-diff(1)](podman-diff.1.md)                  | Inspect changes on a container or image's filesystem.                        |
+| diff       | [podman-container-diff(1)](podman-container-diff.1.md) | Inspect changes on a container's filesystem                               |
 | exec       | [podman-exec(1)](podman-exec.1.md)                  | Execute a command in a running container.                                    |
 | exists     | [podman-container-exists(1)](podman-container-exists.1.md)  | Check if a container exists in local storage                         |
 | export     | [podman-export(1)](podman-export.1.md)              | Export a container's filesystem contents as a tar archive.                   |
@@ -38,7 +38,7 @@ The container command allows you to manage containers
 | restore    | [podman-container-restore(1)](podman-container-restore.1.md)  | Restores one or more containers from a checkpoint.                 |
 | rm         | [podman-rm(1)](podman-rm.1.md)                      | Remove one or more containers.                                               |
 | run        | [podman-run(1)](podman-run.1.md)                    | Run a command in a container.                                                |
-| runlabel   | [podman-container-runlabel(1)](podman-container-runlabel.1.md)  | Executes a command as described by a container image label.      |
+| runlabel   | [podman-container-runlabel(1)](podman-container-runlabel.1.md)  | Executes a command as described by a container-image label.      |
 | start      | [podman-start(1)](podman-start.1.md)                | Starts one or more containers.                                               |
 | stats      | [podman-stats(1)](podman-stats.1.md)                | Display a live stream of one or more container's resource usage statistics.  |
 | stop       | [podman-stop(1)](podman-stop.1.md)                  | Stop one or more running containers.                                         |

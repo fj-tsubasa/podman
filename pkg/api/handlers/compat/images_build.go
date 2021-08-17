@@ -34,13 +34,16 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		contentType := hdr[0]
 		switch contentType {
 		case "application/tar":
-			logrus.Warnf("tar file content type is  %s, should use \"application/x-tar\" content type", contentType)
+			logrus.Infof("tar file content type is  %s, should use \"application/x-tar\" content type", contentType)
 		case "application/x-tar":
 			break
 		default:
-			utils.BadRequest(w, "Content-Type", hdr[0],
-				fmt.Errorf("Content-Type: %s is not supported. Should be \"application/x-tar\"", hdr[0]))
-			return
+			if utils.IsLibpodRequest(r) {
+				utils.BadRequest(w, "Content-Type", hdr[0],
+					fmt.Errorf("Content-Type: %s is not supported. Should be \"application/x-tar\"", hdr[0]))
+				return
+			}
+			logrus.Infof("tar file content type is  %s, should use \"application/x-tar\" content type", contentType)
 		}
 	}
 
@@ -73,10 +76,12 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		CacheFrom              string   `schema:"cachefrom"`
 		Compression            uint64   `schema:"compression"`
 		ConfigureNetwork       string   `schema:"networkmode"`
-		CpuPeriod              uint64   `schema:"cpuperiod"`  // nolint
-		CpuQuota               int64    `schema:"cpuquota"`   // nolint
-		CpuSetCpus             string   `schema:"cpusetcpus"` // nolint
-		CpuShares              uint64   `schema:"cpushares"`  // nolint
+		CpuPeriod              uint64   `schema:"cpuperiod"`    // nolint
+		CpuQuota               int64    `schema:"cpuquota"`     // nolint
+		CpuSetCpus             string   `schema:"cpusetcpus"`   // nolint
+		CpuSetMems             string   `schema:"cpusetmems"`   // nolint
+		CpuShares              uint64   `schema:"cpushares"`    // nolint
+		CgroupParent           string   `schema:"cgroupparent"` // nolint
 		DNSOptions             string   `schema:"dnsoptions"`
 		DNSSearch              string   `schema:"dnssearch"`
 		DNSServers             string   `schema:"dnsservers"`
@@ -106,6 +111,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		Quiet                  bool     `schema:"q"`
 		Registry               string   `schema:"registry"`
 		Rm                     bool     `schema:"rm"`
+		RusageLogFile          string   `schema:"rusagelogfile"`
 		Seccomp                string   `schema:"seccomp"`
 		SecurityOpt            string   `schema:"securityopt"`
 		ShmSize                int      `schema:"shmsize"`
@@ -392,16 +398,16 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	defer auth.RemoveAuthfile(authfile)
 
 	// Channels all mux'ed in select{} below to follow API build protocol
-	stdout := channel.NewWriter(make(chan []byte, 1))
+	stdout := channel.NewWriter(make(chan []byte))
 	defer stdout.Close()
 
-	auxout := channel.NewWriter(make(chan []byte, 1))
+	auxout := channel.NewWriter(make(chan []byte))
 	defer auxout.Close()
 
-	stderr := channel.NewWriter(make(chan []byte, 1))
+	stderr := channel.NewWriter(make(chan []byte))
 	defer stderr.Close()
 
-	reporter := channel.NewWriter(make(chan []byte, 1))
+	reporter := channel.NewWriter(make(chan []byte))
 	defer reporter.Close()
 
 	runtime := r.Context().Value("runtime").(*libpod.Runtime)
@@ -421,7 +427,9 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 			CPUPeriod:          query.CpuPeriod,
 			CPUQuota:           query.CpuQuota,
 			CPUSetCPUs:         query.CpuSetCpus,
+			CPUSetMems:         query.CpuSetMems,
 			CPUShares:          query.CpuShares,
+			CgroupParent:       query.CgroupParent,
 			DNSOptions:         dnsoptions,
 			DNSSearch:          dnssearch,
 			DNSServers:         dnsservers,
@@ -463,6 +471,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		Registry:                       registry,
 		RemoveIntermediateCtrs:         query.Rm,
 		ReportWriter:                   reporter,
+		RusageLogFile:                  query.RusageLogFile,
 		Squash:                         query.Squash,
 		Target:                         query.Target,
 		SystemContext: &types.SystemContext{
@@ -527,7 +536,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 
 	enc := json.NewEncoder(body)
 	enc.SetEscapeHTML(true)
-loop:
+
 	for {
 		m := struct {
 			Stream string `json:"stream,omitempty"`
@@ -541,13 +550,13 @@ loop:
 				stderr.Write([]byte(err.Error()))
 			}
 			flush()
-		case e := <-auxout.Chan():
+		case e := <-reporter.Chan():
 			m.Stream = string(e)
 			if err := enc.Encode(m); err != nil {
 				stderr.Write([]byte(err.Error()))
 			}
 			flush()
-		case e := <-reporter.Chan():
+		case e := <-auxout.Chan():
 			m.Stream = string(e)
 			if err := enc.Encode(m); err != nil {
 				stderr.Write([]byte(err.Error()))
@@ -559,8 +568,8 @@ loop:
 				logrus.Warnf("Failed to json encode error %v", err)
 			}
 			flush()
+			return
 		case <-runCtx.Done():
-			flush()
 			if success {
 				if !utils.IsLibpodRequest(r) {
 					m.Stream = fmt.Sprintf("Successfully built %12.12s\n", imageID)
@@ -577,7 +586,8 @@ loop:
 					}
 				}
 			}
-			break loop
+			flush()
+			return
 		case <-r.Context().Done():
 			cancel()
 			logrus.Infof("Client disconnect reported for build %q / %q.", registry, query.Dockerfile)

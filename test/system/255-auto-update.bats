@@ -4,14 +4,12 @@
 #
 
 load helpers
+load helpers.systemd
 
-UNIT_DIR="/usr/lib/systemd/system"
 SNAME_FILE=$BATS_TMPDIR/services
 
 function setup() {
     skip_if_remote "systemd tests are meaningless over remote"
-    skip_if_rootless
-
     basic_setup
 }
 
@@ -28,9 +26,17 @@ function teardown() {
     done < $SNAME_FILE
 
     rm -f $SNAME_FILE
-    run_podman ? rmi quay.io/libpod/alpine:latest
-    run_podman ? rmi quay.io/libpod/alpine_nginx:latest
-    run_podman ? rmi quay.io/libpod/localtest:latest
+    run_podman ? rmi -f                            \
+            quay.io/libpod/alpine:latest           \
+            quay.io/libpod/busybox:latest          \
+            quay.io/libpod/localtest:latest        \
+            quay.io/libpod/autoupdatebroken:latest \
+            quay.io/libpod/test:latest             \
+            quay.io/libpod/fedora:31
+
+    # The rollback tests may leave some dangling images behind, so let's prune
+    # them to leave a clean state.
+    run_podman ? image prune -f
     basic_teardown
 }
 
@@ -45,21 +51,32 @@ function teardown() {
 function generate_service() {
     local target_img_basename=$1
     local autoupdate=$2
+    local command=$3
+    local extraArgs=$4
+    local noTag=$5
+
+    # Unless specified, set a default command.
+    if [[ -z "$command" ]]; then
+        command="top -d 120"
+    fi
 
     # Container name. Include the autoupdate type, to make debugging easier.
     # IMPORTANT: variable 'cname' is passed (out of scope) up to caller!
     cname=c_${autoupdate//\'/}_$(random_string)
     target_img="quay.io/libpod/$target_img_basename:latest"
-    run_podman tag $IMAGE $target_img
+
+    if [[ -z "$noTag" ]]; then
+        run_podman tag $IMAGE $target_img
+    fi
+
     if [[ -n "$autoupdate" ]]; then
         label="--label io.containers.autoupdate=$autoupdate"
     else
         label=""
     fi
-    run_podman run -d --name $cname $label $target_img top -d 120
+    run_podman create $extraArgs --name $cname $label $target_img $command
 
-    run_podman generate systemd --new $cname
-    echo "$output" > "$UNIT_DIR/container-$cname.service"
+    (cd $UNIT_DIR; run_podman generate systemd --new --files --name $cname)
     echo "container-$cname" >> $SNAME_FILE
     run_podman rm -f $cname
 
@@ -85,7 +102,7 @@ function _wait_service_ready() {
         let timeout=$timeout-1
     done
 
-    # Print serivce status as debug information before failed the case
+    # Print service status as debug information before failed the case
     systemctl status $sname
     die "Timed out waiting for $sname to start"
 }
@@ -121,9 +138,46 @@ function _confirm_update() {
     generate_service alpine image
 
     _wait_service_ready container-$cname.service
-    run_podman auto-update
+    run_podman auto-update --dry-run --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/alpine:latest,pending,registry.*" "Image update is pending."
+
+    run_podman auto-update --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
     is "$output" "Trying to pull.*" "Image is updated."
+    is "$output" ".*container-$cname.service,quay.io/libpod/alpine:latest,true,registry.*" "Image is updated."
+
     _confirm_update $cname $ori_image
+}
+
+@test "podman auto-update - label io.containers.autoupdate=image with rollback" {
+    # Note: the autoupdatebroken image is empty on purpose so it cannot be
+    # executed and force a rollback.  The rollback test for the local policy
+    # is exercising the case where the container doesn't send a ready message.
+    image=quay.io/libpod/autoupdatebroken
+
+    run_podman tag $IMAGE $image
+    generate_service autoupdatebroken image
+
+    _wait_service_ready container-$cname.service
+    run_podman auto-update --dry-run --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,$image:latest,pending,registry.*" "Image update is pending."
+
+    run_podman container inspect --format "{{.Image}}" $cname
+    oldID="$output"
+
+    run_podman inspect --format "{{.ID}}" $cname
+    containerID="$output"
+
+    run_podman auto-update --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" "Trying to pull.*" "Image is updated."
+    is "$output" ".*container-$cname.service,$image:latest,rolled back,registry.*" "Image has been rolled back."
+
+    run_podman container inspect --format "{{.Image}}" $cname
+    is "$output" "$oldID" "container rolled back to previous image"
+
+    run_podman container inspect --format "{{.ID}}" $cname
+    if [[ $output == $containerID ]]; then
+        die "container has not been restarted during rollback (previous id: $containerID, current id: $output)"
+    fi
 }
 
 @test "podman auto-update - label io.containers.autoupdate=disabled" {
@@ -151,11 +205,75 @@ function _confirm_update() {
 
 @test "podman auto-update - label io.containers.autoupdate=local" {
     generate_service localtest local
-    podman commit --change CMD=/bin/bash $cname quay.io/libpod/localtest:latest
+    image=quay.io/libpod/localtest:latest
+    podman commit --change CMD=/bin/bash $cname $image
+    podman image inspect --format "{{.ID}}" $image
+    imageID="$output"
 
     _wait_service_ready container-$cname.service
-    run_podman auto-update
+    run_podman auto-update --dry-run --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/localtest:latest,pending,local.*" "Image update is pending."
+
+    run_podman auto-update --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/localtest:latest,true,local.*" "Image is updated."
+
     _confirm_update $cname $ori_image
+}
+
+@test "podman auto-update - label io.containers.autoupdate=local with rollback" {
+    skip "This test flakes way too often, see #11175"
+    # sdnotify fails with runc 1.0.0-3-dev2 on Ubuntu. Let's just
+    # assume that we work only with crun, nothing else.
+    # [copied from 260-sdnotify.bats]
+    runtime=$(podman_runtime)
+    if [[ "$runtime" != "crun" ]]; then
+        skip "this test only works with crun, not $runtime"
+    fi
+
+    dockerfile1=$PODMAN_TMPDIR/Dockerfile.1
+    cat >$dockerfile1 <<EOF
+FROM quay.io/libpod/fedora:31
+RUN echo -e "#!/bin/sh\n\
+printenv NOTIFY_SOCKET; echo READY; systemd-notify --ready;\n\
+trap 'echo Received SIGTERM, finishing; exit' SIGTERM; echo WAITING; while :; do sleep 0.1; done" \
+>> /runme
+RUN chmod +x /runme
+EOF
+
+    dockerfile2=$PODMAN_TMPDIR/Dockerfile.2
+    cat >$dockerfile2 <<EOF
+FROM quay.io/libpod/fedora:31
+RUN echo -e "#!/bin/sh\n\
+exit 1" >> /runme
+RUN chmod +x /runme
+EOF
+    image=test
+
+    # Generate a healthy image that will run correctly.
+    run_podman build -t quay.io/libpod/$image -f $dockerfile1
+    podman image inspect --format "{{.ID}}" $image
+    oldID="$output"
+
+    generate_service $image local /runme --sdnotify=container noTag
+    _wait_service_ready container-$cname.service
+
+    run_podman auto-update --dry-run --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/$image:latest,false,local.*" "No update available"
+
+    # Generate an unhealthy image that will fail.
+    run_podman build -t quay.io/libpod/$image -f $dockerfile2
+    podman image inspect --format "{{.ID}}" $image
+    newID="$output"
+
+    run_podman auto-update --dry-run --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/$image:latest,pending,local.*" "Image updated is pending"
+
+    # Note: we rollback automatically by default.
+    run_podman auto-update --format "{{.Unit}},{{.Image}},{{.Updated}},{{.Policy}}"
+    is "$output" ".*container-$cname.service,quay.io/libpod/$image:latest,rolled back,local.*" "Rolled back to old image"
+
+    # Make sure that new container is not using the new image ID anymore.
+    _confirm_update $cname $newID
 }
 
 @test "podman auto-update with multiple services" {
@@ -172,7 +290,7 @@ function _confirm_update() {
     do
         local img_base="alpine"
         if [[ $auto_update == "registry" ]]; then
-            img_base="alpine_nginx"
+            img_base="busybox"
         elif [[ $auto_update == "local" ]]; then
             img_base="localtest"
         fi
@@ -187,14 +305,14 @@ function _confirm_update() {
         fi
     done
 
-    # Only check the last service is started. Previous services should already actived.
+    # Only check that the last service is started. Previous services should already be activated.
     _wait_service_ready container-$cname.service
     run_podman commit --change CMD=/bin/bash $local_cname quay.io/libpod/localtest:latest
     # Exit code is expected, due to invalid 'fakevalue'
     run_podman 125 auto-update
     update_log=$output
     is "$update_log" ".*invalid auto-update policy.*" "invalid policy setup"
-    is "$update_log" ".*1 error occurred.*" "invalid policy setup"
+    is "$update_log" ".*Error: invalid auto-update policy.*" "invalid policy setup"
 
     local n_updated=$(grep -c 'Trying to pull' <<<"$update_log")
     is "$n_updated" "2" "Number of images updated from registry."
@@ -236,7 +354,7 @@ EOF
 [Unit]
 Description=Podman auto-update testing service
 Documentation=man:podman-auto-update(1)
-Wants=network.target
+Wants=network-online.target
 After=network-online.target
 
 [Service]
@@ -251,7 +369,8 @@ EOF
     systemctl enable --now podman-auto-update-$cname.timer
     systemctl list-timers --all
 
-    local expect='Finished Podman auto-update testing service'
+    # While systemd v245 and later uses 'Finished', older versions uses 'Started' for oneshot services
+    local expect='(Finished|Started) Podman auto-update testing service'
     local failed_start=failed
     local count=0
     while [ $count -lt 120 ]; do

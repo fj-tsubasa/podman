@@ -79,7 +79,7 @@ func (c *Container) readFromJournal(ctx context.Context, options *logs.LogOption
 		break
 	}
 	if cursorError != nil {
-		return errors.Wrap(cursorError, "inital journal cursor")
+		return errors.Wrap(cursorError, "initial journal cursor")
 	}
 
 	// We need the container's events in the same journal to guarantee
@@ -97,7 +97,6 @@ func (c *Container) readFromJournal(ctx context.Context, options *logs.LogOption
 			}
 		}()
 
-		afterTimeStamp := false        // needed for options.Since
 		tailQueue := []*logs.LogLine{} // needed for options.Tail
 		doTail := options.Tail > 0
 		for {
@@ -149,14 +148,10 @@ func (c *Container) readFromJournal(ctx context.Context, options *logs.LogOption
 				return
 			}
 
-			if !afterTimeStamp {
-				entryTime := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
-				if entryTime.Before(options.Since) {
-					continue
-				}
-				afterTimeStamp = true
+			entryTime := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
+			if (entryTime.Before(options.Since) && !options.Since.IsZero()) || (entryTime.After(options.Until) && !options.Until.IsZero()) {
+				continue
 			}
-
 			// If we're reading an event and the container exited/died,
 			// then we're done and can return.
 			event, ok := entry.Fields["PODMAN_EVENT"]

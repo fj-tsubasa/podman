@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
+	"github.com/containers/common/pkg/sysinfo"
 	"github.com/containers/podman/v3/cmd/podman/common"
 	"github.com/containers/podman/v3/cmd/podman/parse"
 	"github.com/containers/podman/v3/cmd/podman/registry"
@@ -16,6 +20,7 @@ import (
 	"github.com/containers/podman/v3/pkg/errorhandling"
 	"github.com/containers/podman/v3/pkg/specgen"
 	"github.com/containers/podman/v3/pkg/util"
+	"github.com/docker/docker/pkg/parsers"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -43,6 +48,7 @@ var (
 	podIDFile         string
 	replace           bool
 	share             string
+	userns            string
 )
 
 func init() {
@@ -55,9 +61,21 @@ func init() {
 
 	common.DefineNetFlags(createCommand)
 
+	cpusetflagName := "cpuset-cpus"
+	flags.StringVar(&createOptions.CpusetCpus, cpusetflagName, "", "CPUs in which to allow execution")
+	_ = createCommand.RegisterFlagCompletionFunc(cpusetflagName, completion.AutocompleteDefault)
+
+	cpusflagName := "cpus"
+	flags.Float64Var(&createOptions.Cpus, cpusflagName, 0.000, "set amount of CPUs for the pod")
+	_ = createCommand.RegisterFlagCompletionFunc(cpusflagName, completion.AutocompleteDefault)
+
 	cgroupParentflagName := "cgroup-parent"
 	flags.StringVar(&createOptions.CGroupParent, cgroupParentflagName, "", "Set parent cgroup for the pod")
 	_ = createCommand.RegisterFlagCompletionFunc(cgroupParentflagName, completion.AutocompleteDefault)
+
+	usernsFlagName := "userns"
+	flags.StringVar(&userns, usernsFlagName, os.Getenv("PODMAN_USERNS"), "User namespace to use")
+	_ = createCommand.RegisterFlagCompletionFunc(usernsFlagName, common.AutocompleteUserNamespace)
 
 	flags.BoolVar(&createOptions.Infra, "infra", true, "Create an infra container associated with the pod to share namespaces with")
 
@@ -72,6 +90,10 @@ func init() {
 	infraCommandFlagName := "infra-command"
 	flags.String(infraCommandFlagName, containerConfig.Engine.InfraCommand, "The command to run on the infra container when the pod is started")
 	_ = createCommand.RegisterFlagCompletionFunc(infraCommandFlagName, completion.AutocompleteNone)
+
+	infraNameFlagName := "infra-name"
+	flags.StringVarP(&createOptions.InfraName, infraNameFlagName, "", "", "The name used as infra container name")
+	_ = createCommand.RegisterFlagCompletionFunc(infraNameFlagName, completion.AutocompleteNone)
 
 	labelFileFlagName := "label-file"
 	flags.StringSliceVar(&labelFile, labelFileFlagName, []string{}, "Read in a line delimited file of labels")
@@ -88,6 +110,10 @@ func init() {
 	hostnameFlagName := "hostname"
 	flags.StringVarP(&createOptions.Hostname, hostnameFlagName, "", "", "Set a hostname to the pod")
 	_ = createCommand.RegisterFlagCompletionFunc(hostnameFlagName, completion.AutocompleteNone)
+
+	pidFlagName := "pid"
+	flags.StringVar(&createOptions.Pid, pidFlagName, "", "PID namespace to use")
+	_ = createCommand.RegisterFlagCompletionFunc(pidFlagName, common.AutocompleteNamespace)
 
 	podIDFileFlagName := "pod-id-file"
 	flags.StringVar(&podIDFile, podIDFileFlagName, "", "Write the pod ID to the file")
@@ -131,6 +157,9 @@ func create(cmd *cobra.Command, args []string) error {
 			return errors.New("cannot set infra-image without an infra container")
 		}
 		createOptions.InfraImage = ""
+		if createOptions.InfraName != "" {
+			return errors.New("cannot set infra-name without an infra container")
+		}
 
 		if cmd.Flag("share").Changed && share != "none" && share != "" {
 			return fmt.Errorf("cannot set share(%s) namespaces without an infra container", cmd.Flag("share").Value)
@@ -154,6 +183,11 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	createOptions.Userns, err = specgen.ParseUserNamespace(userns)
+	if err != nil {
+		return err
+	}
+
 	if cmd.Flag("pod-id-file").Changed {
 		podIDFD, err = util.OpenExclusiveFile(podIDFile)
 		if err != nil && os.IsExist(err) {
@@ -165,6 +199,8 @@ func create(cmd *cobra.Command, args []string) error {
 		defer errorhandling.CloseQuiet(podIDFD)
 		defer errorhandling.SyncQuiet(podIDFD)
 	}
+
+	createOptions.Pid = cmd.Flag("pid").Value.String()
 
 	createOptions.Net, err = common.NetFlagsToNetOptions(cmd, createOptions.Infra)
 	if err != nil {
@@ -185,6 +221,46 @@ func create(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	numCPU := sysinfo.NumCPU()
+	if numCPU == 0 {
+		numCPU = runtime.NumCPU()
+	}
+	if createOptions.Cpus > float64(numCPU) {
+		createOptions.Cpus = float64(numCPU)
+	}
+	copy := createOptions.CpusetCpus
+	cpuSet := createOptions.Cpus
+	if cpuSet == 0 {
+		cpuSet = float64(sysinfo.NumCPU())
+	}
+	ret, err := parsers.ParseUintList(copy)
+	copy = ""
+	if err != nil {
+		errors.Wrapf(err, "could not parse list")
+	}
+	var vals []int
+	for ind, val := range ret {
+		if val {
+			vals = append(vals, ind)
+		}
+	}
+	sort.Ints(vals)
+	for ind, core := range vals {
+		if core > int(cpuSet) {
+			if copy == "" {
+				copy = "0-" + strconv.Itoa(int(cpuSet))
+				createOptions.CpusetCpus = copy
+				break
+			} else {
+				createOptions.CpusetCpus = copy
+				break
+			}
+		} else if ind != 0 {
+			copy += "," + strconv.Itoa(core)
+		} else {
+			copy = "" + strconv.Itoa(core)
+		}
+	}
 	response, err := registry.ContainerEngine().PodCreate(context.Background(), createOptions)
 	if err != nil {
 		return err

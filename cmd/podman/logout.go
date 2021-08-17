@@ -8,7 +8,6 @@ import (
 	"github.com/containers/image/v5/types"
 	"github.com/containers/podman/v3/cmd/podman/common"
 	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/pkg/registries"
 	"github.com/spf13/cobra"
 )
 
@@ -44,13 +43,14 @@ func init() {
 
 	logoutOptions.Stdout = os.Stdout
 	logoutOptions.AcceptUnspecifiedRegistry = true
+	logoutOptions.AcceptRepositories = true
 }
 
 // Implementation of podman-logout.
 func logout(cmd *cobra.Command, args []string) error {
-	sysCtx := types.SystemContext{
-		AuthFilePath:             logoutOptions.AuthFile,
-		SystemRegistriesConfPath: registries.SystemRegistriesConfPath(),
+	sysCtx := &types.SystemContext{
+		AuthFilePath: logoutOptions.AuthFile,
 	}
-	return auth.Logout(&sysCtx, &logoutOptions, args)
+	setRegistriesConfPath(sysCtx)
+	return auth.Logout(sysCtx, &logoutOptions, args)
 }

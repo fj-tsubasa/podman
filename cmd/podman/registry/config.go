@@ -15,6 +15,9 @@ import (
 )
 
 const (
+	// NoMoveProcess used as cobra.Annotation when command doesn't need Podman to be moved to a separate cgroup
+	NoMoveProcess = "NoMoveProcess"
+
 	// ParentNSRequired used as cobra.Annotation when command requires root access
 	ParentNSRequired = "ParentNSRequired"
 
@@ -86,7 +89,12 @@ func newPodmanConfig() {
 // use for the containers.conf configuration file.
 func setXdgDirs() error {
 	if !rootless.IsRootless() {
-		return nil
+		// unset XDG_RUNTIME_DIR for root
+		// Sometimes XDG_RUNTIME_DIR is set to /run/user/0 sometimes it is unset,
+		// the inconsistency is causing issues for the dnsname plugin.
+		// It is already set to an empty string for conmon so lets do the same
+		// for podman. see #10806 and #10745
+		return os.Unsetenv("XDG_RUNTIME_DIR")
 	}
 
 	// Setup XDG_RUNTIME_DIR

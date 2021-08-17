@@ -15,9 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/podman/v3/pkg/rootless"
-
 	"github.com/containers/podman/v3/pkg/machine"
+	"github.com/containers/podman/v3/pkg/rootless"
 	"github.com/containers/podman/v3/utils"
 	"github.com/containers/storage/pkg/homedir"
 	"github.com/digitalocean/go-qemu/qmp"
@@ -248,7 +247,23 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 	if err := v.startHostNetworking(); err != nil {
 		return errors.Errorf("unable to start host networking: %q", err)
 	}
+
+	rtPath, err := getRuntimeDir()
+	if err != nil {
+		return err
+	}
+
+	// If the temporary podman dir is not created, create it
+	podmanTempDir := filepath.Join(rtPath, "podman")
+	if _, err := os.Stat(podmanTempDir); os.IsNotExist(err) {
+		if mkdirErr := os.MkdirAll(podmanTempDir, 0755); mkdirErr != nil {
+			return err
+		}
+	}
 	qemuSocketPath, _, err := v.getSocketandPid()
+	if err != nil {
+		return err
+	}
 
 	for i := 0; i < 6; i++ {
 		qemuSocketConn, err = net.Dial("unix", qemuSocketPath)
@@ -257,9 +272,6 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 		}
 		time.Sleep(wait)
 		wait++
-	}
-	if err != nil {
-		return err
 	}
 
 	fd, err := qemuSocketConn.(*net.UnixConn).File()
@@ -470,6 +482,8 @@ func (v *MachineVM) SSH(name string, opts machine.SSHOptions) error {
 	}
 
 	cmd := exec.Command("ssh", args...)
+	logrus.Debugf("Executing: ssh %v\n", args)
+
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -591,10 +605,12 @@ func CheckActiveVM() (bool, string, error) {
 // startHostNetworking runs a binary on the host system that allows users
 // to setup port forwarding to the podman virtual machine
 func (v *MachineVM) startHostNetworking() error {
-	binary, err := exec.LookPath(machine.ForwarderBinaryName)
-	if err != nil {
+	// TODO we may wish to configure the directory in containers common
+	binary := filepath.Join("/usr/libexec/podman/", machine.ForwarderBinaryName)
+	if _, err := os.Stat(binary); err != nil {
 		return err
 	}
+
 	// Listen on all at port 7777 for setting up and tearing
 	// down forwarding
 	listenSocket := "tcp://0.0.0.0:7777"
