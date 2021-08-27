@@ -166,9 +166,25 @@ var _ = Describe("Podman run", func() {
 	})
 
 	It("podman run a container based on remote image", func() {
-		session := podmanTest.Podman([]string{"run", "-dt", BB_GLIBC, "ls"})
+		// Changing session to rsession
+		rsession := podmanTest.Podman([]string{"run", "-dt", ALPINE, "ls"})
+		rsession.WaitWithDefaultTimeout()
+		Expect(rsession).Should(Exit(0))
+
+		lock := GetPortLock("5000")
+		defer lock.Unlock()
+		session := podmanTest.Podman([]string{"run", "-d", "--name", "registry", "-p", "5000:5000", registry, "/entrypoint.sh", "/etc/docker/registry/config.yml"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
+
+		if !WaitContainerReady(podmanTest, "registry", "listening on", 20, 1) {
+			Skip("Cannot start docker registry.")
+		}
+
+		run := podmanTest.Podman([]string{"run", "--tls-verify=false", ALPINE})
+		run.WaitWithDefaultTimeout()
+		Expect(run).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainers()).To(Equal(3))
 	})
 
 	It("podman run a container with a --rootfs", func() {
@@ -946,7 +962,7 @@ USER mail`, BB)
 		Expect(err).To(BeNil())
 		mountpoint := "/myvol/"
 
-		session := podmanTest.Podman([]string{"create", "--volume", vol + ":" + mountpoint, ALPINE, "cat", mountpoint + filename})
+		session := podmanTest.Podman([]string{"create", "--volume", vol + ":" + mountpoint + ":z", ALPINE, "cat", mountpoint + filename})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		ctrID := session.OutputToString()
@@ -1315,10 +1331,10 @@ USER mail`, BB)
 		}
 
 		curCgroupsBytes, err := ioutil.ReadFile("/proc/self/cgroup")
-		Expect(err).To(BeNil())
-		var curCgroups string = string(curCgroupsBytes)
+		Expect(err).ShouldNot(HaveOccurred())
+		var curCgroups = string(curCgroupsBytes)
 		fmt.Printf("Output:\n%s\n", curCgroups)
-		Expect(curCgroups).To(Not(Equal("")))
+		Expect(curCgroups).ToNot(Equal(""))
 
 		ctrName := "testctr"
 		container := podmanTest.Podman([]string{"run", "--name", ctrName, "-d", "--cgroups=disabled", ALPINE, "top"})
@@ -1329,14 +1345,14 @@ USER mail`, BB)
 		inspectOut := podmanTest.InspectContainer(ctrName)
 		Expect(len(inspectOut)).To(Equal(1))
 		pid := inspectOut[0].State.Pid
-		Expect(pid).To(Not(Equal(0)))
+		Expect(pid).ToNot(Equal(0))
 		Expect(inspectOut[0].HostConfig.CgroupParent).To(Equal(""))
 
 		ctrCgroupsBytes, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-		Expect(err).To(BeNil())
-		var ctrCgroups string = string(ctrCgroupsBytes)
+		Expect(err).ShouldNot(HaveOccurred())
+		var ctrCgroups = string(ctrCgroupsBytes)
 		fmt.Printf("Output\n:%s\n", ctrCgroups)
-		Expect(curCgroups).To(Equal(ctrCgroups))
+		Expect(ctrCgroups).To(Equal(curCgroups))
 	})
 
 	It("podman run with cgroups=enabled makes cgroups", func() {

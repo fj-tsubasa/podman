@@ -264,6 +264,11 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 	if rootless.IsRootless() {
 		storageFs = ROOTLESS_STORAGE_FS
 	}
+	if os.Getenv("STORAGE_FS") != "" {
+		storageFs = os.Getenv("STORAGE_FS")
+		storageOptions = "--storage-driver " + storageFs
+	}
+
 	p := &PodmanTestIntegration{
 		PodmanTest: PodmanTest{
 			PodmanBinary:  podmanBinary,
@@ -645,9 +650,13 @@ func isRootless() bool {
 	return os.Geteuid() != 0
 }
 
+func isCgroupsV1() bool {
+	return !CGROUPSV2
+}
+
 func SkipIfCgroupV1(reason string) {
 	checkReason(reason)
-	if !CGROUPSV2 {
+	if isCgroupsV1() {
 		Skip(reason)
 	}
 }
@@ -840,4 +849,19 @@ func (p *PodmanTestIntegration) buildImage(dockerfile, imageName string, layers 
 	Expect(session).Should(Exit(0), fmt.Sprintf("BuildImage session output: %q", session.OutputToString()))
 	output := session.OutputToStringArray()
 	return output[len(output)-1]
+}
+
+func writeYaml(content string, fileName string) error {
+	f, err := os.Create(fileName)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(content)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

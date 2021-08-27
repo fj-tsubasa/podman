@@ -7,9 +7,11 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	buildahDefine "github.com/containers/buildah/define"
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/types"
@@ -266,38 +268,68 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 	}
 
 	containers := make([]*libpod.Container, 0, len(podYAML.Spec.Containers))
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
 	for _, container := range podYAML.Spec.Containers {
 		// Contains all labels obtained from kube
 		labels := make(map[string]string)
-
-		// NOTE: set the pull policy to "newer".  This will cover cases
-		// where the "latest" tag requires a pull and will also
-		// transparently handle "localhost/" prefixed files which *may*
-		// refer to a locally built image OR an image running a
-		// registry on localhost.
-		pullPolicy := config.PullPolicyNewer
-		if len(container.ImagePullPolicy) > 0 {
-			// Make sure to lower the strings since K8s pull policy
-			// may be capitalized (see bugzilla.redhat.com/show_bug.cgi?id=1985905).
-			rawPolicy := string(container.ImagePullPolicy)
-			pullPolicy, err = config.ParsePullPolicy(strings.ToLower(rawPolicy))
+		var pulledImage *libimage.Image
+		buildFile, err := getBuildFile(container.Image, cwd)
+		if err != nil {
+			return nil, err
+		}
+		existsLocally, err := ic.Libpod.LibimageRuntime().Exists(container.Image)
+		if err != nil {
+			return nil, err
+		}
+		if (len(buildFile) > 0 && !existsLocally) || (len(buildFile) > 0 && options.Build) {
+			buildOpts := new(buildahDefine.BuildOptions)
+			commonOpts := new(buildahDefine.CommonBuildOptions)
+			buildOpts.ConfigureNetwork = buildahDefine.NetworkDefault
+			buildOpts.Isolation = buildahDefine.IsolationChroot
+			buildOpts.CommonBuildOpts = commonOpts
+			buildOpts.Output = container.Image
+			if _, _, err := ic.Libpod.Build(ctx, *buildOpts, []string{buildFile}...); err != nil {
+				return nil, err
+			}
+			i, _, err := ic.Libpod.LibimageRuntime().LookupImage(container.Image, new(libimage.LookupImageOptions))
 			if err != nil {
 				return nil, err
 			}
-		}
-		// This ensures the image is the image store
-		pullOptions := &libimage.PullOptions{}
-		pullOptions.AuthFilePath = options.Authfile
-		pullOptions.CertDirPath = options.CertDir
-		pullOptions.SignaturePolicyPath = options.SignaturePolicy
-		pullOptions.Writer = writer
-		pullOptions.Username = options.Username
-		pullOptions.Password = options.Password
-		pullOptions.InsecureSkipTLSVerify = options.SkipTLSVerify
+			pulledImage = i
+		} else {
+			// NOTE: set the pull policy to "newer".  This will cover cases
+			// where the "latest" tag requires a pull and will also
+			// transparently handle "localhost/" prefixed files which *may*
+			// refer to a locally built image OR an image running a
+			// registry on localhost.
+			pullPolicy := config.PullPolicyNewer
+			if len(container.ImagePullPolicy) > 0 {
+				// Make sure to lower the strings since K8s pull policy
+				// may be capitalized (see bugzilla.redhat.com/show_bug.cgi?id=1985905).
+				rawPolicy := string(container.ImagePullPolicy)
+				pullPolicy, err = config.ParsePullPolicy(strings.ToLower(rawPolicy))
+				if err != nil {
+					return nil, err
+				}
+			}
+			// This ensures the image is the image store
+			pullOptions := &libimage.PullOptions{}
+			pullOptions.AuthFilePath = options.Authfile
+			pullOptions.CertDirPath = options.CertDir
+			pullOptions.SignaturePolicyPath = options.SignaturePolicy
+			pullOptions.Writer = writer
+			pullOptions.Username = options.Username
+			pullOptions.Password = options.Password
+			pullOptions.InsecureSkipTLSVerify = options.SkipTLSVerify
 
-		pulledImages, err := ic.Libpod.LibimageRuntime().Pull(ctx, container.Image, pullPolicy, pullOptions)
-		if err != nil {
-			return nil, err
+			pulledImages, err := ic.Libpod.LibimageRuntime().Pull(ctx, container.Image, pullPolicy, pullOptions)
+			if err != nil {
+				return nil, err
+			}
+			pulledImage = pulledImages[0]
 		}
 
 		// Handle kube annotations
@@ -318,7 +350,7 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 
 		specgenOpts := kube.CtrSpecGenOptions{
 			Container:      container,
-			Image:          pulledImages[0],
+			Image:          pulledImage,
 			Volumes:        volumes,
 			PodID:          pod.ID(),
 			PodName:        podName,
@@ -508,4 +540,119 @@ func sortKubeKinds(documentList [][]byte) ([][]byte, error) {
 	}
 
 	return sortedDocumentList, nil
+}
+func imageNamePrefix(imageName string) string {
+	prefix := imageName
+	s := strings.Split(prefix, ":")
+	if len(s) > 0 {
+		prefix = s[0]
+	}
+	s = strings.Split(prefix, "/")
+	if len(s) > 0 {
+		prefix = s[len(s)-1]
+	}
+	s = strings.Split(prefix, "@")
+	if len(s) > 0 {
+		prefix = s[0]
+	}
+	return prefix
+}
+
+func getBuildFile(imageName string, cwd string) (string, error) {
+	buildDirName := imageNamePrefix(imageName)
+	containerfilePath := filepath.Join(cwd, buildDirName, "Containerfile")
+	dockerfilePath := filepath.Join(cwd, buildDirName, "Dockerfile")
+
+	_, err := os.Stat(filepath.Join(containerfilePath))
+	if err == nil {
+		logrus.Debugf("building %s with %s", imageName, containerfilePath)
+		return containerfilePath, nil
+	}
+	// If the error is not because the file does not exist, take
+	// a mulligan and try Dockerfile.  If that also fails, return that
+	// error
+	if err != nil && !os.IsNotExist(err) {
+		logrus.Errorf("%v: unable to check for %s", err, containerfilePath)
+	}
+
+	_, err = os.Stat(filepath.Join(dockerfilePath))
+	if err == nil {
+		logrus.Debugf("building %s with %s", imageName, dockerfilePath)
+		return dockerfilePath, nil
+	}
+	// Strike two
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	return "", err
+}
+
+func (ic *ContainerEngine) PlayKubeDown(ctx context.Context, path string, _ entities.PlayKubeDownOptions) (*entities.PlayKubeReport, error) {
+	var (
+		podNames []string
+	)
+	reports := new(entities.PlayKubeReport)
+
+	// read yaml document
+	content, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// split yaml document
+	documentList, err := splitMultiDocYAML(content)
+	if err != nil {
+		return nil, err
+	}
+
+	// sort kube kinds
+	documentList, err = sortKubeKinds(documentList)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to sort kube kinds in %q", path)
+	}
+
+	for _, document := range documentList {
+		kind, err := getKubeKind(document)
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to read %q as kube YAML", path)
+		}
+
+		switch kind {
+		case "Pod":
+			var podYAML v1.Pod
+			if err := yaml.Unmarshal(document, &podYAML); err != nil {
+				return nil, errors.Wrapf(err, "unable to read YAML %q as Kube Pod", path)
+			}
+			podNames = append(podNames, podYAML.ObjectMeta.Name)
+		case "Deployment":
+			var deploymentYAML v1apps.Deployment
+
+			if err := yaml.Unmarshal(document, &deploymentYAML); err != nil {
+				return nil, errors.Wrapf(err, "unable to read YAML %q as Kube Deployment", path)
+			}
+			var numReplicas int32 = 1
+			deploymentName := deploymentYAML.ObjectMeta.Name
+			if deploymentYAML.Spec.Replicas != nil {
+				numReplicas = *deploymentYAML.Spec.Replicas
+			}
+			for i := 0; i < int(numReplicas); i++ {
+				podName := fmt.Sprintf("%s-pod-%d", deploymentName, i)
+				podNames = append(podNames, podName)
+			}
+		default:
+			continue
+		}
+	}
+
+	// Add the reports
+	reports.StopReport, err = ic.PodStop(ctx, podNames, entities.PodStopOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	reports.RmReport, err = ic.PodRm(ctx, podNames, entities.PodRmOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return reports, nil
 }

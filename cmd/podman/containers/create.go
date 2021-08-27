@@ -10,6 +10,7 @@ import (
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/transports/alltransports"
+	"github.com/containers/image/v5/types"
 	"github.com/containers/podman/v3/cmd/podman/common"
 	"github.com/containers/podman/v3/cmd/podman/registry"
 	"github.com/containers/podman/v3/cmd/podman/utils"
@@ -96,7 +97,7 @@ func create(cmd *cobra.Command, args []string) error {
 	var (
 		err error
 	)
-	cliVals.Net, err = common.NetFlagsToNetOptions(cmd, cliVals.Pod == "")
+	cliVals.Net, err = common.NetFlagsToNetOptions(cmd, cliVals.Pod == "" && cliVals.PodIDFile == "")
 	if err != nil {
 		return err
 	}
@@ -261,7 +262,7 @@ func createInit(c *cobra.Command) error {
 }
 
 func pullImage(imageName string) (string, error) {
-	pullPolicy, err := config.ValidatePullPolicy(cliVals.Pull)
+	pullPolicy, err := config.ParsePullPolicy(cliVals.Pull)
 	if err != nil {
 		return "", err
 	}
@@ -287,6 +288,7 @@ func pullImage(imageName string) (string, error) {
 		Variant:         cliVals.Variant,
 		SignaturePolicy: cliVals.SignaturePolicy,
 		PullPolicy:      pullPolicy,
+		SkipTLSVerify:   types.NewOptionalBool(!cliVals.TLSVerify), // If Flag changed for TLS Verification
 	})
 	if pullErr != nil {
 		return "", pullErr

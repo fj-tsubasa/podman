@@ -268,7 +268,7 @@ func WithRegistriesConf(path string) RuntimeOption {
 	logrus.Debugf("Setting custom registries.conf: %q", path)
 	return func(rt *Runtime) error {
 		if _, err := os.Stat(path); err != nil {
-			return errors.Wrap(err, "error locating specified registries.conf")
+			return errors.Wrap(err, "locating specified registries.conf")
 		}
 		if rt.imageContext == nil {
 			rt.imageContext = &types.SystemContext{
@@ -1041,7 +1041,7 @@ func WithDependencyCtrs(ctrs []*Container) CtrCreateOption {
 // namespace with a minimal configuration.
 // An optional array of port mappings can be provided.
 // Conflicts with WithNetNSFrom().
-func WithNetNS(portMappings []ocicni.PortMapping, postConfigureNetNS bool, netmode string, networks []string) CtrCreateOption {
+func WithNetNS(portMappings []ocicni.PortMapping, exposedPorts map[uint16][]string, postConfigureNetNS bool, netmode string, networks []string) CtrCreateOption {
 	return func(ctr *Container) error {
 		if ctr.valid {
 			return define.ErrCtrFinalized
@@ -1051,6 +1051,7 @@ func WithNetNS(portMappings []ocicni.PortMapping, postConfigureNetNS bool, netmo
 		ctr.config.NetMode = namespaces.NetworkMode(netmode)
 		ctr.config.CreateNetNS = true
 		ctr.config.PortMappings = portMappings
+		ctr.config.ExposedPorts = exposedPorts
 
 		ctr.config.Networks = networks
 
@@ -1453,7 +1454,7 @@ func WithNamedVolumes(volumes []*ContainerNamedVolume) CtrCreateOption {
 		for _, vol := range volumes {
 			mountOpts, err := util.ProcessOptions(vol.Options, false, "")
 			if err != nil {
-				return errors.Wrapf(err, "error processing options for named volume %q mounted at %q", vol.Name, vol.Dest)
+				return errors.Wrapf(err, "processing options for named volume %q mounted at %q", vol.Name, vol.Dest)
 			}
 
 			ctr.config.NamedVolumes = append(ctr.config.NamedVolumes, &ContainerNamedVolume{

@@ -8,7 +8,7 @@ podman-play-kube - Create containers, pods or volumes based on Kubernetes YAML
 
 ## DESCRIPTION
 **podman play kube** will read in a structured file of Kubernetes YAML.  It will then recreate the containers, pods or volumes described in the YAML.  Containers within a pod are then started and the ID of the new Pod or the name of the new Volume is output. If the yaml file is specified as "-" then `podman play kube` will read the YAML file from stdin.
-
+Using the `--down` command line option, it is also capable of tearing down the pods created by a previous run of `podman play kube`.
 Ideally the input file would be one created by Podman (see podman-generate-kube(1)).  This would guarantee a smooth import and expected results.
 
 Currently, the supported Kubernetes kinds are:
@@ -35,6 +35,36 @@ A Kubernetes PersistentVolumeClaim represents a Podman named volume. Only the Pe
 - volume.podman.io/gid
 - volume.podman.io/mount-options
 
+Play kube is capable of building images on the fly given the correct directory layout and Containerfiles. This
+option is not available for remote clients yet. Consider the following excerpt from a YAML file:
+```
+apiVersion: v1
+kind: Pod
+metadata:
+...
+spec:
+  containers:
+  - command:
+    - top
+    - name: container
+      value: podman
+    image: foobar
+...
+```
+
+If there is a directory named `foobar` in the current working directory with a file named `Containerfile` or `Dockerfile`,
+Podman play kube will build that image and name it `foobar`.  An example directory structure for this example would look
+like:
+```
+|- mykubefiles
+    |- myplayfile.yaml
+    |- foobar
+         |- Containerfile
+```
+
+The build will consider `foobar` to be the context directory for the build. If there is an image in local storage
+called `foobar`, the image will not be built unless the `--build` flag is used.
+
 ## OPTIONS
 
 #### **--authfile**=*path*
@@ -44,6 +74,10 @@ If the authorization state is not found there, $HOME/.docker/config.json is chec
 
 Note: You can also override the default path of the authentication file by setting the REGISTRY\_AUTH\_FILE
 environment variable. `export REGISTRY_AUTH_FILE=path`
+
+#### **--build**
+
+Build images even if they are found in the local storage.
 
 #### **--cert-dir**=*path*
 
@@ -61,6 +95,11 @@ Note: The *--configmap* option can be used multiple times or a comma-separated l
 The [username[:password]] to use to authenticate with the registry if required.
 If one or both values are not supplied, a command line prompt will appear and the
 value can be entered.  The password is entered without echo.
+
+#### **--down**
+
+Tears down the pods that were created by a previous run of `play kube`.  The pods are stopped and then
+removed.  Any volumes created are left intact.
 
 #### **--ip**=*IP address*
 
@@ -111,6 +150,15 @@ $ podman play kube demo.yml
 Recreate the pod and containers as described in a file `demo.yml` sent to stdin
 ```
 $ cat demo.yml | podman play kube -
+52182811df2b1e73f36476003a66ec872101ea59034ac0d4d3a7b40903b955a6
+
+```
+Teardown the pod and containers as described in a file `demo.yml`
+```
+$  podman play kube --down demo.yml
+Pods stopped:
+52182811df2b1e73f36476003a66ec872101ea59034ac0d4d3a7b40903b955a6
+Pods removed:
 52182811df2b1e73f36476003a66ec872101ea59034ac0d4d3a7b40903b955a6
 ```
 

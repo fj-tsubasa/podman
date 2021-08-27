@@ -10,6 +10,7 @@ import (
 
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/podman/v3/cmd/podman/registry"
+	"github.com/containers/podman/v3/libpod/network/types"
 	"github.com/containers/podman/v3/pkg/api/handlers"
 	"github.com/containers/podman/v3/pkg/cgroups"
 	"github.com/containers/podman/v3/pkg/domain/entities"
@@ -112,6 +113,7 @@ type ContainerCLIOpts struct {
 	Sysctl            []string
 	Systemd           string
 	Timeout           uint
+	TLSVerify         bool
 	TmpFS             []string
 	TTY               bool
 	Timezone          string
@@ -149,7 +151,7 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 		cappDrop   []string
 		entrypoint *string
 		init       bool
-		specPorts  []specgen.PortMapping
+		specPorts  []types.PortMapping
 	)
 
 	if cc.HostConfig.Init != nil {
@@ -239,7 +241,7 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 			if err != nil {
 				return nil, nil, err
 			}
-			tmpPort := specgen.PortMapping{
+			tmpPort := types.PortMapping{
 				HostIP:        pb.HostIP,
 				ContainerPort: uint16(port.Int()),
 				HostPort:      uint16(hostport),
