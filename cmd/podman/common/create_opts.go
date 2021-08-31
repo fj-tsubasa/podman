@@ -16,124 +16,9 @@ import (
 	"github.com/containers/podman/v3/pkg/domain/entities"
 	"github.com/containers/podman/v3/pkg/rootless"
 	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/pkg/errors"
 )
-
-type ContainerCLIOpts struct {
-	Annotation        []string
-	Attach            []string
-	Authfile          string
-	BlkIOWeight       string
-	BlkIOWeightDevice []string
-	CapAdd            []string
-	CapDrop           []string
-	CgroupNS          string
-	CGroupsMode       string
-	CGroupParent      string
-	CIDFile           string
-	ConmonPIDFile     string
-	CPUPeriod         uint64
-	CPUQuota          int64
-	CPURTPeriod       uint64
-	CPURTRuntime      int64
-	CPUShares         uint64
-	CPUS              float64
-	CPUSetCPUs        string
-	CPUSetMems        string
-	Devices           []string
-	DeviceCGroupRule  []string
-	DeviceReadBPs     []string
-	DeviceReadIOPs    []string
-	DeviceWriteBPs    []string
-	DeviceWriteIOPs   []string
-	Entrypoint        *string
-	Env               []string
-	EnvHost           bool
-	EnvFile           []string
-	Expose            []string
-	GIDMap            []string
-	GroupAdd          []string
-	HealthCmd         string
-	HealthInterval    string
-	HealthRetries     uint
-	HealthStartPeriod string
-	HealthTimeout     string
-	Hostname          string
-	HTTPProxy         bool
-	ImageVolume       string
-	Init              bool
-	InitContainerType string
-	InitPath          string
-	Interactive       bool
-	IPC               string
-	KernelMemory      string
-	Label             []string
-	LabelFile         []string
-	LogDriver         string
-	LogOptions        []string
-	Memory            string
-	MemoryReservation string
-	MemorySwap        string
-	MemorySwappiness  int64
-	Name              string
-	NoHealthCheck     bool
-	OOMKillDisable    bool
-	OOMScoreAdj       int
-	Arch              string
-	OS                string
-	Variant           string
-	Personality       string
-	PID               string
-	PIDsLimit         *int64
-	Platform          string
-	Pod               string
-	PodIDFile         string
-	PreserveFDs       uint
-	Privileged        bool
-	PublishAll        bool
-	Pull              string
-	Quiet             bool
-	ReadOnly          bool
-	ReadOnlyTmpFS     bool
-	Restart           string
-	Replace           bool
-	Requires          []string
-	Rm                bool
-	RootFS            bool
-	Secrets           []string
-	SecurityOpt       []string
-	SdNotifyMode      string
-	ShmSize           string
-	SignaturePolicy   string
-	StopSignal        string
-	StopTimeout       uint
-	StorageOpt        []string
-	SubUIDName        string
-	SubGIDName        string
-	Sysctl            []string
-	Systemd           string
-	Timeout           uint
-	TLSVerify         bool
-	TmpFS             []string
-	TTY               bool
-	Timezone          string
-	Umask             string
-	UIDMap            []string
-	Ulimit            []string
-	User              string
-	UserNS            string
-	UTS               string
-	Mount             []string
-	Volume            []string
-	VolumesFrom       []string
-	Workdir           string
-	SeccompPolicy     string
-	PidFile           string
-
-	Net *entities.NetOptions
-
-	CgroupConf []string
-}
 
 func stringMaptoArray(m map[string]string) []string {
 	a := make([]string, 0, len(m))
@@ -145,7 +30,7 @@ func stringMaptoArray(m map[string]string) []string {
 
 // ContainerCreateToContainerCLIOpts converts a compat input struct to cliopts so it can be converted to
 // a specgen spec.
-func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*ContainerCLIOpts, []string, error) {
+func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *config.Config) (*entities.ContainerCreateOptions, []string, error) {
 	var (
 		capAdd     []string
 		cappDrop   []string
@@ -210,18 +95,30 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 		expose = append(expose, fmt.Sprintf("%s/%s", p.Port(), p.Proto()))
 	}
 
-	// mounts type=tmpfs/bind,source=,dest=,opt=val
-	// TODO options
+	// mounts type=tmpfs/bind,source=...,target=...=,opt=val
 	mounts := make([]string, 0, len(cc.HostConfig.Mounts))
+	var builder strings.Builder
 	for _, m := range cc.HostConfig.Mounts {
-		mount := fmt.Sprintf("type=%s", m.Type)
-		if len(m.Source) > 0 {
-			mount += fmt.Sprintf(",source=%s", m.Source)
+		addField(&builder, "type", string(m.Type))
+		addField(&builder, "source", m.Source)
+		addField(&builder, "target", m.Target)
+		addField(&builder, "ro", strconv.FormatBool(m.ReadOnly))
+		addField(&builder, "consistency", string(m.Consistency))
+
+		// Map any specialized mount options that intersect between *Options and cli options
+		switch m.Type {
+		case mount.TypeBind:
+			addField(&builder, "bind-propagation", string(m.BindOptions.Propagation))
+			addField(&builder, "bind-nonrecursive", strconv.FormatBool(m.BindOptions.NonRecursive))
+		case mount.TypeTmpfs:
+			addField(&builder, "tmpfs-size", strconv.FormatInt(m.TmpfsOptions.SizeBytes, 10))
+			addField(&builder, "tmpfs-mode", strconv.FormatUint(uint64(m.TmpfsOptions.Mode), 10))
+		case mount.TypeVolume:
+			// All current VolumeOpts are handled above
+			// See vendor/github.com/containers/common/pkg/parse/parse.go:ValidateVolumeOpts()
 		}
-		if len(m.Target) > 0 {
-			mount += fmt.Sprintf(",dst=%s", m.Target)
-		}
-		mounts = append(mounts, mount)
+		mounts = append(mounts, builder.String())
+		builder.Reset()
 	}
 
 	// dns
@@ -341,7 +238,7 @@ func ContainerCreateToContainerCLIOpts(cc handlers.CreateContainerConfig, rtc *c
 	// Note: several options here are marked as "don't need". this is based
 	// on speculation by Matt and I. We think that these come into play later
 	// like with start. We believe this is just a difference in podman/compat
-	cliOpts := ContainerCLIOpts{
+	cliOpts := entities.ContainerCreateOptions{
 		// Attach:            nil, // don't need?
 		Authfile:     "",
 		CapAdd:       append(capAdd, cc.HostConfig.CapAdd...),
@@ -621,4 +518,18 @@ func logDriver() string {
 		return containerConfig.Containers.LogDriver
 	}
 	return ""
+}
+
+// addField is a helper function to populate mount options
+func addField(b *strings.Builder, name string, value string) {
+	if value == "" {
+		return
+	}
+
+	if b.Len() > 0 {
+		b.WriteRune(',')
+	}
+	b.WriteString(name)
+	b.WriteRune('=')
+	b.WriteString(value)
 }

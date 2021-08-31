@@ -972,11 +972,12 @@ func (c *Container) checkDependenciesRunning() ([]string, error) {
 		}
 
 		// Check the status
+		conf := depCtr.Config()
 		state, err := depCtr.State()
 		if err != nil {
 			return nil, errors.Wrapf(err, "error retrieving state of dependency %s of container %s", dep, c.ID())
 		}
-		if state != define.ContainerStateRunning {
+		if state != define.ContainerStateRunning && !conf.IsInfra {
 			notRunning = append(notRunning, dep)
 		}
 		depCtrs[dep] = depCtr
@@ -1068,6 +1069,11 @@ func (c *Container) init(ctx context.Context, retainRetries bool) error {
 	// Generate the OCI newSpec
 	newSpec, err := c.generateSpec(ctx)
 	if err != nil {
+		return err
+	}
+
+	// Make sure the workdir exists while initializing container
+	if err := c.resolveWorkDir(); err != nil {
 		return err
 	}
 
