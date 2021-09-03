@@ -1,8 +1,8 @@
-#!/usr/bin/env bats 
+#!/usr/bin/env bats
 #
 # Test for the scenario that
 # "podman import" tarball exported from a container and modified the content.
-# 
+#
 
 load helpers
 
@@ -13,10 +13,10 @@ alpine="quay.io/libpod/alpine"
   # Create a test file following test
   touch $PODMAN_TMPDIR/testfile1
   echo "modified tar file" >> $PODMAN_TMPDIR/testfile2
-  
+
   # Create Dockerfile for test
   dockerfile=$PODMAN_TMPDIR/Dockerfile
-  
+
   cat >$dockerfile <<EOF
 FROM $alpine
 ADD testfile1 /tmp
@@ -52,10 +52,10 @@ EOF
 
   # Tag imported image
   run_podman tag $iid $a_img
-  
+
   # Run imported image to confirm tarball modification, block on non-special signal
-  run_podman run --name $a_cnt -d $a_img 
- 
+  run_podman run --name $a_cnt -d $a_img
+
   # Run 'logs -f' on that container.
   # It is redirected to a named pipe in the backgroud,
   # to prevent a race condition that this test
@@ -82,15 +82,15 @@ EOF
   # Confirm testfile2 is added to tarball
   read -t 10 -u 5 testfile2
   is "$testfile2" "modified tar file" "modify tarball content"
-  
+
   # Kill can send non-TERM/KILL signal to container to exit
-  run_podman kill --signal 2 $a_cnt 
+  run_podman kill --signal 2 $a_cnt
   run_podman wait $a_cnt
- 
+
   # Confirm exit within timeout
   run_podman ps -a --filter name=$a_cnt --format '{{.Status}}'
   is "$output" "Exited (33)" "Exit by non-TERM/KILL"
-  
+
   run_podman rmi -fa
 
 }
