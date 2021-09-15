@@ -53,7 +53,7 @@ unset REGISTRY_AUTH_FILE
     # Give it three tries, to compensate for flakes
     run_podman ${PODMAN_SEARCH_ARGS} pull $REGISTRY_IMAGE ||
         run_podman ${PODMAN_SEARCH_ARGS} pull $REGISTRY_IMAGE ||
-        run_podman ${PODMAN_SEARCH_ARGS} pull $REGISTRY_IMAGE 
+        run_podman ${PODMAN_SEARCH_ARGS} pull $REGISTRY_IMAGE
 
     # Registry image needs a cert. Self-signed is good enough.
     CERT=$AUTHDIR/domain.crt
@@ -66,8 +66,7 @@ unset REGISTRY_AUTH_FILE
    fi
 
     # Prepare credentials for TLS certification
-    cp $CERT /etc/pki/ca-trust/source/anchors/
-    update-ca-trust
+    cp $CERT $AUTHDIR/domain.cert
 
     # Store credentials where container will see them
     if [ ! -e $AUTHDIR/htpasswd ]; then
@@ -90,7 +89,7 @@ unset REGISTRY_AUTH_FILE
                -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
                -e REGISTRY_HTTP_TLS_CERTIFICATE=/auth/domain.crt \
                -e REGISTRY_HTTP_TLS_KEY=/auth/domain.key \
-               $REGISTRY_IMAGE 
+               $REGISTRY_IMAGE
 
 }
 
@@ -146,31 +145,35 @@ unset REGISTRY_AUTH_FILE
         echo "--limit option doesn't work"
         exit 1
     fi
-
-
 }
 
 @test "podman search - tls-verify and authfile" {
 
     destname=ok-$(random_string 10 | tr A-Z a-z)-ok
 
-    run_podman login --tls-verify=true \
+    run_podman login --tls-verify=true --cert-dir ${AUTHDIR} \
                --username ${PODMAN_SEARCH_USER} \
                --password-stdin \
                --authfile ${PODMAN_TMPDIR}/auth.json \
                localhost:${PODMAN_SEARCH_REGISTRY_PORT} <<< "${PODMAN_SEARCH_PASS}"
 
-    run_podman push --tls-verify=true \
+    run_podman push --tls-verify=true --cert-dir ${AUTHDIR} \
                --authfile ${PODMAN_TMPDIR}/auth.json \
                $IMAGE localhost:${PODMAN_SEARCH_REGISTRY_PORT}/$destname
 
-    
-    # TEST: search with TLS certification
-    run_podman search --tls-verify=true \
+    # TEST: search with TLS certification: expected ERROR
+    run_podman 125 search --tls-verify=true \
                --authfile ${PODMAN_TMPDIR}/auth.json \
                --format "table {{.Name}}" \
                localhost:${PODMAN_SEARCH_REGISTRY_PORT}/$destname
+    ERR=".* couldn't search registry .* Get \"https://localhost:${PODMAN_SEARCH_REGISTRY_PORT}/v2/\""
+    is "${lines[1]}" "$ERR" "Confirm trying TLS connection"
 
+    # TEST: search without TLS certification: expected OK
+    run_podman search --tls-verify=false \
+               --authfile ${PODMAN_TMPDIR}/auth.json \
+               --format "table {{.Name}}" \
+               localhost:${PODMAN_SEARCH_REGISTRY_PORT}/$destname
     is "${lines[1]}" "localhost:${PODMAN_SEARCH_REGISTRY_PORT}/$destname" "search output is destname"
 
     run_podman logout --authfile ${PODMAN_TMPDIR}/auth.json localhost:${PODMAN_SEARCH_REGISTRY_PORT}
@@ -181,9 +184,6 @@ unset REGISTRY_AUTH_FILE
 # BEGIN teardown (remove the registry container)
 
 @test "podman search [stop registry, clean up]" {
-
-    rm /etc/pki/ca-trust/source/anchors/domain.crt
-    update-ca-trust
 
     # For manual debugging; user may request keeping the registry running
     if [ -n "${PODMAN_TEST_KEEP_SEARCH_REGISTRY}" ]; then
