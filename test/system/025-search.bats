@@ -101,11 +101,11 @@ unset REGISTRY_AUTH_FILE
 
     run_podman search --filter=is-official docker.io/registry
 
-    lines=(`echo "$output" | awk -F"  +" '{print $5}'`)
+    official_column=(`echo "$output" | awk -F"  +" '{print $5}'`)
 
     # Confirm to get OFFICIAL column
-    if expr "${lines[0]}" : "OFFICIAL" >/dev/null; then
-        lines=("${lines[@]:1}")
+    if expr "${official_column[0]}" : "OFFICIAL" >/dev/null; then
+        official_column=("${official_column[@]:1}")
     else
         echo "expected field is not OFFICIAL"
         exit 1
@@ -113,7 +113,7 @@ unset REGISTRY_AUTH_FILE
 
     # TEST: get official image only
     local i
-    for i in "${lines[@]}"; do
+    for i in "${official_column[@]}"; do
         if [[ "${i}" != "[OK]" ]]; then
             echo "OFFICIAL field is not OK"
             exit 1
@@ -128,20 +128,20 @@ unset REGISTRY_AUTH_FILE
     run_podman search --format "table {{.Index}} {{.Name}}" \
                       --limit $limit_num docker.io/registry
 
-    raw1=(`echo "$output" | awk '{print $1}'`)
-    raw2=(`echo "$output" | awk '{print $2}'`)
+    index_column=(`echo "$output" | awk '{print $1}'`)
+    name_column=(`echo "$output" | awk '{print $2}'`)
 
     # TEST: get column specified by --format option
-    if expr "${raw1[0]}" : "INDEX" && expr "${raw2[0]}" : "NAME"; then
-        raw1=("${raw1[@]:1}")
-        raw2=("${raw2[@]:1}")
+    if expr "${index_column[0]}" : "INDEX" && expr "${name_column[0]}" : "NAME"; then
+        index_column=("${index_column[@]:1}")
+        name_column=("${name_column[@]:1}")
     else
         echo "--foramt option doesn't work"
         exit 1
     fi
 
     # TEST: get the number of image specified by --limit option
-    if "${#raw1[@]}" != $limit_num; then
+    if "${#index_column[@]}" != $limit_num; then
         echo "--limit option doesn't work"
         exit 1
     fi
@@ -166,8 +166,8 @@ unset REGISTRY_AUTH_FILE
                --authfile ${PODMAN_TMPDIR}/auth.json \
                --format "table {{.Name}}" \
                localhost:${PODMAN_SEARCH_REGISTRY_PORT}/$destname
-    ERR=".* couldn't search registry .* Get \"https://localhost:${PODMAN_SEARCH_REGISTRY_PORT}/v2/\""
-    is "${lines[1]}" "$ERR" "Confirm trying TLS connection"
+    err=".* couldn't search registry .* Get \"https://localhost:${PODMAN_SEARCH_REGISTRY_PORT}/v2/\""
+    is "${lines[1]}" "$err" "Confirm trying TLS connection"
 
     # TEST: search without TLS certification: expected OK
     run_podman search --tls-verify=false \
