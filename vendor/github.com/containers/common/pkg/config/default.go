@@ -84,10 +84,6 @@ var (
 		"/usr/lib/cni",
 		"/opt/cni/bin",
 	}
-
-	// DefaultRootlessNetwork is the kind of of rootless networking
-	// for containers
-	DefaultRootlessNetwork = "slirp4netns"
 )
 
 const (
@@ -197,7 +193,7 @@ func DefaultConfig() (*Config, error) {
 			NoHosts:            false,
 			PidsLimit:          DefaultPidsLimit,
 			PidNS:              "private",
-			RootlessNetworking: DefaultRootlessNetwork,
+			RootlessNetworking: getDefaultRootlessNetwork(),
 			ShmSize:            DefaultShmSize,
 			TZ:                 "",
 			Umask:              "0022",
@@ -213,6 +209,7 @@ func DefaultConfig() (*Config, error) {
 		},
 		Engine:  *defaultEngineConfig,
 		Secrets: defaultSecretConfig(),
+		Machine: defaultMachineConfig(),
 	}, nil
 }
 
@@ -221,6 +218,16 @@ func DefaultConfig() (*Config, error) {
 func defaultSecretConfig() SecretConfig {
 	return SecretConfig{
 		Driver: "file",
+	}
+}
+
+// defaultMachineConfig returns the default machine configuration.
+func defaultMachineConfig() MachineConfig {
+	return MachineConfig{
+		CPUs:     1,
+		DiskSize: 10,
+		Image:    "testing",
+		Memory:   2048,
 	}
 }
 
@@ -251,6 +258,7 @@ func defaultConfigFromMemory() (*EngineConfig, error) {
 	c.StaticDir = filepath.Join(storeOpts.GraphRoot, "libpod")
 	c.VolumePath = filepath.Join(storeOpts.GraphRoot, "volumes")
 
+	c.HelperBinariesDir = defaultHelperBinariesDir
 	c.HooksDir = DefaultHooksDirs
 	c.ImageDefaultTransport = _defaultTransport
 	c.StateType = BoltDBStateStore
@@ -339,8 +347,6 @@ func defaultConfigFromMemory() (*EngineConfig, error) {
 	// constants.
 	c.LockType = "shm"
 	c.MachineEnabled = false
-	c.MachineImage = "testing"
-
 	c.ChownCopiedFiles = true
 
 	return c, nil
@@ -559,10 +565,4 @@ func (c *Config) MachineEnabled() bool {
 // rootless containers should use
 func (c *Config) RootlessNetworking() string {
 	return c.Containers.RootlessNetworking
-}
-
-// MachineImage returns the image to be
-// used when creating a podman-machine VM
-func (c *Config) MachineImage() string {
-	return c.Engine.MachineImage
 }
