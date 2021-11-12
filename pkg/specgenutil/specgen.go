@@ -806,6 +806,7 @@ func parseWeightDevices(s *specgen.SpecGenerator, weightDevs []string) error {
 			return fmt.Errorf("invalid weight for device: %s", val)
 		}
 		w := uint16(weight)
+		s.WeightDevice = make(map[string]specs.LinuxWeightDevice)
 		s.WeightDevice[split[0]] = specs.LinuxWeightDevice{
 			Weight:     &w,
 			LeafWeight: nil,
