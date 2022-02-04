@@ -11,13 +11,13 @@ require (
 	github.com/container-orchestrated-devices/container-device-interface v0.0.0-20220111162300-46367ec063fd
 	github.com/containernetworking/cni v1.0.1
 	github.com/containernetworking/plugins v1.0.1
-	github.com/containers/buildah v1.24.0
-	github.com/containers/common v0.47.1
+	github.com/containers/buildah v1.24.1
+	github.com/containers/common v0.47.3
 	github.com/containers/conmon v2.0.20+incompatible
-	github.com/containers/image/v5 v5.19.0
+	github.com/containers/image/v5 v5.19.1
 	github.com/containers/ocicrypt v1.1.2
 	github.com/containers/psgo v1.7.2
-	github.com/containers/storage v1.38.1
+	github.com/containers/storage v1.38.2
 	github.com/coreos/go-systemd/v22 v22.3.2
 	github.com/coreos/stream-metadata-go v0.0.0-20210225230131-70edb9eb47b3
 	github.com/cyphar/filepath-securejoin v0.2.3
@@ -25,7 +25,7 @@ require (
 	github.com/digitalocean/go-qemu v0.0.0-20210326154740-ac9e0b687001
 	github.com/docker/distribution v2.7.1+incompatible
 	github.com/docker/docker v20.10.12+incompatible
-	github.com/docker/go-connections v0.4.0
+	github.com/docker/go-connections v0.4.1-0.20210727194412-58542c764a11
 	github.com/docker/go-plugins-helpers v0.0.0-20211224144127-6eecb7beb651
 	github.com/docker/go-units v0.4.0
 	github.com/dtylman/scp v0.0.0-20181017070807-f3000a34aef4
@@ -44,7 +44,7 @@ require (
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
 	github.com/mrunalp/fileutils v0.5.0
 	github.com/onsi/ginkgo v1.16.5
-	github.com/onsi/gomega v1.18.0
+	github.com/onsi/gomega v1.18.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.0.3-0.20220114050600-8b9d41f48198
 	github.com/opencontainers/runc v1.1.0
