@@ -16,8 +16,10 @@ import (
 	"github.com/containers/buildah/define"
 	buildahdocker "github.com/containers/buildah/docker"
 	"github.com/containers/buildah/internal"
+	"github.com/containers/buildah/pkg/parse"
 	"github.com/containers/buildah/pkg/rusage"
 	"github.com/containers/buildah/util"
+	config "github.com/containers/common/pkg/config"
 	cp "github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/image/v5/manifest"
@@ -48,21 +50,22 @@ import (
 // If we're naming the result of the build, only the last stage will apply that
 // name to the image that it produces.
 type StageExecutor struct {
-	ctx             context.Context
-	executor        *Executor
-	log             func(format string, args ...interface{})
-	index           int
-	stages          imagebuilder.Stages
-	name            string
-	builder         *buildah.Builder
-	preserved       int
-	volumes         imagebuilder.VolumeSet
-	volumeCache     map[string]string
-	volumeCacheInfo map[string]os.FileInfo
-	mountPoint      string
-	output          string
-	containerIDs    []string
-	stage           *imagebuilder.Stage
+	ctx                   context.Context
+	executor              *Executor
+	log                   func(format string, args ...interface{})
+	index                 int
+	stages                imagebuilder.Stages
+	name                  string
+	builder               *buildah.Builder
+	preserved             int
+	volumes               imagebuilder.VolumeSet
+	volumeCache           map[string]string
+	volumeCacheInfo       map[string]os.FileInfo
+	mountPoint            string
+	output                string
+	containerIDs          []string
+	stage                 *imagebuilder.Stage
+	argsFromContainerfile []string
 }
 
 // Preserve informs the stage executor that from this point on, it needs to
@@ -595,6 +598,22 @@ func (s *StageExecutor) prepare(ctx context.Context, from string, initializeIBCo
 		}
 	}
 
+	builderSystemContext := s.executor.systemContext
+	// get platform string from stage
+	if stage.Builder.Platform != "" {
+		os, arch, variant, err := parse.Platform(stage.Builder.Platform)
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to parse platform %q", stage.Builder.Platform)
+		}
+		if arch != "" || variant != "" {
+			builderSystemContext.ArchitectureChoice = arch
+			builderSystemContext.VariantChoice = variant
+		}
+		if os != "" {
+			builderSystemContext.OSChoice = os
+		}
+	}
+
 	builderOptions := buildah.BuilderOptions{
 		Args:                  ib.Args,
 		FromImage:             from,
@@ -604,7 +623,7 @@ func (s *StageExecutor) prepare(ctx context.Context, from string, initializeIBCo
 		BlobDirectory:         s.executor.blobDirectory,
 		SignaturePolicyPath:   s.executor.signaturePolicyPath,
 		ReportWriter:          s.executor.reportWriter,
-		SystemContext:         s.executor.systemContext,
+		SystemContext:         builderSystemContext,
 		Isolation:             s.executor.isolation,
 		NamespaceOptions:      s.executor.namespaceOptions,
 		ConfigureNetwork:      s.executor.configureNetwork,
@@ -1211,6 +1230,11 @@ func (s *StageExecutor) getCreatedBy(node *parser.Node, addedContentSummary stri
 	}
 	switch strings.ToUpper(node.Value) {
 	case "ARG":
+		for _, variable := range strings.Fields(node.Original) {
+			if variable != "ARG" {
+				s.argsFromContainerfile = append(s.argsFromContainerfile, variable)
+			}
+		}
 		buildArgs := s.getBuildArgsKey()
 		return "/bin/sh -c #(nop) ARG " + buildArgs
 	case "RUN":
@@ -1254,7 +1278,31 @@ func (s *StageExecutor) getBuildArgsResolvedForRun() string {
 			if inImage {
 				envs = append(envs, fmt.Sprintf("%s=%s", key, configuredEnvs[key]))
 			} else {
-				envs = append(envs, fmt.Sprintf("%s=%s", key, value))
+				// By default everything must be added to history.
+				// Following variable is configured to false only for special cases.
+				addToHistory := true
+
+				// Following value is being assigned from build-args,
+				// check if this key belongs to any of the predefined allowlist args e.g Proxy Variables
+				// and if that arg is not manually set in Containerfile/Dockerfile
+				// then don't write its value to history.
+				// Following behaviour ensures parity with docker/buildkit.
+				for _, variable := range config.ProxyEnv {
+					if key == variable {
+						// found in predefined args
+						// so don't add to history
+						// unless user did explicit `ARG <some-predefined-proxy-variable>`
+						addToHistory = false
+						for _, processedArg := range s.argsFromContainerfile {
+							if key == processedArg {
+								addToHistory = true
+							}
+						}
+					}
+				}
+				if addToHistory {
+					envs = append(envs, fmt.Sprintf("%s=%s", key, value))
+				}
 			}
 		}
 	}
