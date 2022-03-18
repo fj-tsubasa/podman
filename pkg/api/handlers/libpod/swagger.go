@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/image/v5/manifest"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/pkg/errors"
 )
 
@@ -131,6 +131,12 @@ type swagNetworkCreateReport struct {
 type swagNetworkPruneResponse struct {
 	// in:body
 	Body []entities.NetworkPruneReport
+}
+
+// Network connect
+// swagger:model NetworkConnectRequest
+type swagNetworkConnectRequest struct {
+	entities.NetworkConnectOptions
 }
 
 func ServeSwagger(w http.ResponseWriter, r *http.Request) {

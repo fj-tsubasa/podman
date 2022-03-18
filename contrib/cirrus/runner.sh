@@ -12,7 +12,7 @@ set -eo pipefail
 # most notably:
 #
 #    PODBIN_NAME  : "podman" (i.e. local) or "remote"
-#    TEST_ENVIRON : 'host' or 'container'; desired environment in which to run
+#    TEST_ENVIRON : 'host', 'host-netavark', or 'container'; desired environment in which to run
 #    CONTAINER    : 1 if *currently* running inside a container, 0 if host
 #
 
@@ -55,6 +55,7 @@ function _run_unit() {
 }
 
 function _run_apiv2() {
+    source .venv/requests/bin/activate
     make localapiv2 |& logformatter
 }
 
@@ -96,7 +97,7 @@ function _run_bindings() {
 }
 
 function _run_docker-py() {
-    source venv/bin/activate
+    source .venv/docker-py/bin/activate
     make run-docker-py-tests
 }
 
@@ -233,8 +234,7 @@ function _run_altbuild() {
             make build-no-cgo
             ;;
         *RPM*)
-            make -f ./.copr/Makefile
-            rpmbuild --rebuild ./podman-*.src.rpm
+            make package
             ;;
         Alt*Cross)
             arches=(\

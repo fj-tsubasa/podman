@@ -11,11 +11,11 @@ import (
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -237,12 +237,12 @@ func (i *inspector) inspect(namesOrIDs []string) error {
 }
 
 func printJSON(data []interface{}) error {
-	buf, err := json.MarshalIndent(data, "", "    ")
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Println(string(buf))
-	return err
+	enc := json.NewEncoder(os.Stdout)
+	// by default, json marshallers will force utf=8 from
+	// a string. this breaks healthchecks that use <,>, &&.
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "     ")
+	return enc.Encode(data)
 }
 
 func printTmpl(typ, row string, data []interface{}) error {

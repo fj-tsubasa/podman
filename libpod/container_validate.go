@@ -1,7 +1,7 @@
 package libpod
 
 import (
-	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v4/libpod/define"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 )
@@ -57,13 +57,13 @@ func (c *Container) validate() error {
 			if ns.Type == spec.PIDNamespace {
 				foundPid = true
 				if ns.Path != "" {
-					return errors.Wrapf(define.ErrInvalidArg, "containers not creating CGroups must create a private PID namespace - cannot use another")
+					return errors.Wrapf(define.ErrInvalidArg, "containers not creating Cgroups must create a private PID namespace - cannot use another")
 				}
 				break
 			}
 		}
 		if !foundPid {
-			return errors.Wrapf(define.ErrInvalidArg, "containers not creating CGroups must create a private PID namespace")
+			return errors.Wrapf(define.ErrInvalidArg, "containers not creating Cgroups must create a private PID namespace")
 		}
 	}
 
@@ -74,7 +74,7 @@ func (c *Container) validate() error {
 
 	// Cannot set static IP or MAC if joining >1 CNI network.
 	if len(c.config.Networks) > 1 && (c.config.StaticIP != nil || c.config.StaticMAC != nil) {
-		return errors.Wrapf(define.ErrInvalidArg, "cannot set static IP or MAC address if joining more than one CNI network")
+		return errors.Wrapf(define.ErrInvalidArg, "cannot set static IP or MAC address if joining more than one network")
 	}
 
 	// Using image resolv.conf conflicts with various DNS settings.
@@ -113,17 +113,6 @@ func (c *Container) validate() error {
 			return errors.Wrapf(define.ErrInvalidArg, "two volumes found with destination %s", vol.Dest)
 		}
 		destinations[vol.Dest] = true
-	}
-
-	// Check that networks and network aliases match up.
-	ctrNets := make(map[string]bool)
-	for _, net := range c.config.Networks {
-		ctrNets[net] = true
-	}
-	for net := range c.config.NetworkAliases {
-		if _, ok := ctrNets[net]; !ok {
-			return errors.Wrapf(define.ErrNoSuchNetwork, "container tried to set network aliases for network %s but is not connected to the network", net)
-		}
 	}
 
 	// If User in the OCI spec is set, require that c.config.User is set for

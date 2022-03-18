@@ -6,15 +6,15 @@ import (
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/specgen"
-	"github.com/containers/podman/v3/pkg/specgenutil"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/specgen"
+	"github.com/containers/podman/v4/pkg/specgenutil"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -61,7 +61,7 @@ func runFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
 
 	flags.SetInterspersed(false)
-	common.DefineCreateFlags(cmd, &cliVals, false)
+	common.DefineCreateFlags(cmd, &cliVals, false, false)
 	common.DefineNetFlags(cmd)
 
 	flags.SetNormalizeFunc(utils.AliasFlags)
@@ -82,6 +82,9 @@ func runFlags(cmd *cobra.Command) {
 	flags.String(gpuFlagName, "", "This is a Docker specific option and is a NOOP")
 	_ = cmd.RegisterFlagCompletionFunc(gpuFlagName, completion.AutocompleteNone)
 	_ = flags.MarkHidden("gpus")
+
+	passwdFlagName := "passwd"
+	flags.BoolVar(&runOpts.Passwd, passwdFlagName, true, "add entries to /etc/passwd and /etc/group")
 
 	if registry.IsRemote() {
 		_ = flags.MarkHidden("preserve-fds")
@@ -120,7 +123,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	flags := cmd.Flags()
-	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags, cliVals.Pod == "" && cliVals.PodIDFile == "")
+	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags)
 	if err != nil {
 		return err
 	}
@@ -191,6 +194,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	s.RawImageName = rawImageName
+	s.Passwd = &runOpts.Passwd
 	runOpts.Spec = s
 
 	if _, err := createPodIfNecessary(cmd, s, cliVals.Net); err != nil {

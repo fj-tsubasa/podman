@@ -9,10 +9,10 @@ import (
 
 	buildahDefine "github.com/containers/buildah/define"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -56,6 +56,7 @@ ENTRYPOINT ["/catatonit", "-P"]`, catatonitPath)
 		CommonBuildOpts: &buildahDefine.CommonBuildOptions{},
 		Output:          imageName,
 		Quiet:           true,
+		IgnoreFile:      "/dev/null", // makes sure to not read a local .ignorefile (see #13529)
 		IIDFile:         "/dev/null", // prevents Buildah from writing the ID on stdout
 	}
 	if _, _, err := rt.Build(context.Background(), buildOptions, tmpF.Name()); err != nil {
@@ -82,7 +83,7 @@ func pullOrBuildInfraImage(p *entities.PodSpec, rt *libpod.Runtime) error {
 		imageName = rtConfig.Engine.InfraImage
 	}
 
-	if imageName != config.DefaultInfraImage {
+	if imageName != "" {
 		_, err := rt.LibimageRuntime().Pull(context.Background(), imageName, config.PullPolicyMissing, nil)
 		if err != nil {
 			return err
@@ -135,7 +136,7 @@ func MakePod(p *entities.PodSpec, rt *libpod.Runtime) (*libpod.Pod, error) {
 			return nil, err
 		}
 		p.PodSpecGen.InfraContainerSpec.User = "" // infraSpec user will get incorrectly assigned via the container creation process, overwrite here
-		rtSpec, spec, opts, err := MakeContainer(context.Background(), rt, p.PodSpecGen.InfraContainerSpec)
+		rtSpec, spec, opts, err := MakeContainer(context.Background(), rt, p.PodSpecGen.InfraContainerSpec, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -166,6 +167,9 @@ func createPodOptions(p *specgen.PodSpecGenerator, rt *libpod.Runtime, infraSpec
 	)
 	if !p.NoInfra { //&& infraSpec != nil {
 		options = append(options, libpod.WithInfraContainer())
+		if p.ShareParent == nil || (p.ShareParent != nil && *p.ShareParent) {
+			options = append(options, libpod.WithPodParent())
+		}
 		nsOptions, err := GetNamespaceOptions(p.SharedNamespaces, p.InfraContainerSpec.NetNS.IsHost())
 		if err != nil {
 			return nil, err
@@ -218,9 +222,7 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 	case specgen.Host:
 		logrus.Debugf("Pod will use host networking")
 		if len(p.InfraContainerSpec.PortMappings) > 0 ||
-			p.InfraContainerSpec.StaticIP != nil ||
-			p.InfraContainerSpec.StaticMAC != nil ||
-			len(p.InfraContainerSpec.CNINetworks) > 0 ||
+			len(p.InfraContainerSpec.Networks) > 0 ||
 			p.InfraContainerSpec.NetNS.NSMode == specgen.NoNetwork {
 			return nil, errors.Wrapf(define.ErrInvalidArg, "cannot set host network if network-related configuration is specified")
 		}
@@ -234,9 +236,7 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 	case specgen.NoNetwork:
 		logrus.Debugf("Pod will not use networking")
 		if len(p.InfraContainerSpec.PortMappings) > 0 ||
-			p.InfraContainerSpec.StaticIP != nil ||
-			p.InfraContainerSpec.StaticMAC != nil ||
-			len(p.InfraContainerSpec.CNINetworks) > 0 ||
+			len(p.InfraContainerSpec.Networks) > 0 ||
 			p.InfraContainerSpec.NetNS.NSMode == "host" {
 			return nil, errors.Wrapf(define.ErrInvalidArg, "cannot disable pod network if network-related configuration is specified")
 		}
@@ -264,15 +264,13 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 	if len(p.DNSSearch) > 0 {
 		p.InfraContainerSpec.DNSSearch = p.DNSSearch
 	}
-	if p.StaticIP != nil {
-		p.InfraContainerSpec.StaticIP = p.StaticIP
-	}
-	if p.StaticMAC != nil {
-		p.InfraContainerSpec.StaticMAC = p.StaticMAC
-	}
 	if p.NoManageResolvConf {
 		p.InfraContainerSpec.UseImageResolvConf = true
 	}
+	if len(p.Networks) > 0 {
+		p.InfraContainerSpec.Networks = p.Networks
+	}
+	// deprecated cni networks for api users
 	if len(p.CNINetworks) > 0 {
 		p.InfraContainerSpec.CNINetworks = p.CNINetworks
 	}
@@ -284,8 +282,6 @@ func MapSpec(p *specgen.PodSpecGenerator) (*specgen.SpecGenerator, error) {
 		p.InfraContainerSpec.ConmonPidFile = p.InfraConmonPidFile
 	}
 
-	if p.InfraImage != config.DefaultInfraImage {
-		p.InfraContainerSpec.Image = p.InfraImage
-	}
+	p.InfraContainerSpec.Image = p.InfraImage
 	return p.InfraContainerSpec, nil
 }

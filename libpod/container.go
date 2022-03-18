@@ -10,20 +10,20 @@ import (
 	"time"
 
 	types040 "github.com/containernetworking/cni/pkg/types/040"
+	"github.com/containers/common/libnetwork/cni"
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/common/pkg/secrets"
 	"github.com/containers/image/v5/manifest"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/lock"
-	"github.com/containers/podman/v3/libpod/network/cni"
-	"github.com/containers/podman/v3/libpod/network/types"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/lock"
 	"github.com/containers/storage"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
-// CgroupfsDefaultCgroupParent is the cgroup parent for CGroupFS in libpod
+// CgroupfsDefaultCgroupParent is the cgroup parent for CgroupFS in libpod
 const CgroupfsDefaultCgroupParent = "/libpod_parent"
 
 // SystemdDefaultCgroupParent is the cgroup parent for the systemd cgroup
@@ -56,7 +56,7 @@ const (
 	UserNS LinuxNS = iota
 	// UTSNS is the UTS namespace
 	UTSNS LinuxNS = iota
-	// CgroupNS is the CGroup namespace
+	// CgroupNS is the Cgroup namespace
 	CgroupNS LinuxNS = iota
 )
 
@@ -213,6 +213,15 @@ type ContainerState struct {
 
 	// containerPlatformState holds platform-specific container state.
 	containerPlatformState
+
+	// Following checkpoint/restore related information is displayed
+	// if the container has been checkpointed or restored.
+	CheckpointedTime time.Time `json:"checkpointedTime,omitempty"`
+	RestoredTime     time.Time `json:"restoredTime,omitempty"`
+	CheckpointLog    string    `json:"checkpointLog,omitempty"`
+	CheckpointPath   string    `json:"checkpointPath,omitempty"`
+	RestoreLog       string    `json:"restoreLog,omitempty"`
+	Restored         bool      `json:"restored,omitempty"`
 }
 
 // ContainerNamedVolume is a named volume that will be mounted into the
@@ -408,7 +417,10 @@ func (c *Container) MountLabel() string {
 
 // Systemd returns whether the container will be running in systemd mode
 func (c *Container) Systemd() bool {
-	return c.config.Systemd
+	if c.config.Systemd != nil {
+		return *c.config.Systemd
+	}
+	return false
 }
 
 // User returns the user who the container is run as
@@ -566,7 +578,7 @@ func (c *Container) CreatedTime() time.Time {
 	return c.config.CreatedTime
 }
 
-// CgroupParent gets the container's CGroup parent
+// CgroupParent gets the container's Cgroup parent
 func (c *Container) CgroupParent() string {
 	return c.config.CgroupParent
 }
@@ -898,10 +910,10 @@ func (c *Container) CgroupManager() string {
 	return cgroupManager
 }
 
-// CGroupPath returns a cgroups "path" for the given container.
+// CgroupPath returns a cgroups "path" for the given container.
 // Note that the container must be running.  Otherwise, an error
 // is returned.
-func (c *Container) CGroupPath() (string, error) {
+func (c *Container) CgroupPath() (string, error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
@@ -1166,17 +1178,28 @@ func (c *Container) Secrets() []*ContainerSecret {
 // is joining the default CNI network - the network name will be included in the
 // returned array of network names, but the container did not explicitly join
 // this network.
-func (c *Container) Networks() ([]string, bool, error) {
+func (c *Container) Networks() ([]string, error) {
 	if !c.batched {
 		c.lock.Lock()
 		defer c.lock.Unlock()
 
 		if err := c.syncContainer(); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
 
-	return c.networks()
+	networks, err := c.networks()
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(networks))
+
+	for name := range networks {
+		names = append(names, name)
+	}
+
+	return names, nil
 }
 
 // NetworkMode gets the configured network mode for the container.
@@ -1220,36 +1243,8 @@ func (c *Container) NetworkMode() string {
 }
 
 // Unlocked accessor for networks
-func (c *Container) networks() ([]string, bool, error) {
-	networks, err := c.runtime.state.GetNetworks(c)
-	if err != nil && errors.Cause(err) == define.ErrNoSuchNetwork {
-		if len(c.config.Networks) == 0 && c.config.NetMode.IsBridge() {
-			return []string{c.runtime.config.Network.DefaultNetwork}, true, nil
-		}
-		return c.config.Networks, false, nil
-	}
-
-	return networks, false, err
-}
-
-// networksByNameIndex provides us with a map of container networks where key
-// is network name and value is the index position
-func (c *Container) networksByNameIndex() (map[string]int, error) {
-	networks, _, err := c.networks()
-	if err != nil {
-		return nil, err
-	}
-	networkNamesByIndex := make(map[string]int, len(networks))
-	for index, name := range networks {
-		networkNamesByIndex[name] = index
-	}
-	return networkNamesByIndex, nil
-}
-
-// add puts the new given CNI network name into the tracking map
-// and assigns it a new integer based on the map length
-func (d ContainerNetworkDescriptions) add(networkName string) {
-	d[networkName] = len(d)
+func (c *Container) networks() (map[string]types.PerNetworkOptions, error) {
+	return c.runtime.state.GetNetworks(c)
 }
 
 // getInterfaceByName returns a formatted interface name for a given
@@ -1270,9 +1265,7 @@ func (c *Container) getNetworkStatus() map[string]types.StatusBlock {
 		return c.state.NetworkStatus
 	}
 	if c.state.NetworkStatusOld != nil {
-		// Note: NetworkStatusOld does not contain the network names so we get them extra
-		// Generally the order should be the same
-		networks, _, err := c.networks()
+		networks, err := c.networks()
 		if err != nil {
 			return nil
 		}
@@ -1280,12 +1273,16 @@ func (c *Container) getNetworkStatus() map[string]types.StatusBlock {
 			return nil
 		}
 		result := make(map[string]types.StatusBlock, len(c.state.NetworkStatusOld))
-		for i := range c.state.NetworkStatusOld {
+		i := 0
+		// Note: NetworkStatusOld does not contain the network names so we get them extra
+		// We cannot guarantee the same order but after a state refresh it should work
+		for netName := range networks {
 			status, err := cni.CNIResultToStatus(c.state.NetworkStatusOld[i])
 			if err != nil {
 				return nil
 			}
-			result[networks[i]] = status
+			result[netName] = status
+			i++
 		}
 		c.state.NetworkStatus = result
 		_ = c.save()

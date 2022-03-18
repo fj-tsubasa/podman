@@ -5,13 +5,14 @@ import (
 	"os"
 
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/spf13/cobra"
 )
 
 var (
+	noHeading            bool
 	showTrustDescription = "Display trust policy for the system"
 	showTrustCommand     = &cobra.Command{
 		Annotations:       map[string]string{registry.EngineMode: registry.ABIMode},
@@ -40,6 +41,7 @@ func init() {
 	showFlags.BoolVar(&showTrustOptions.Raw, "raw", false, "Output raw policy file")
 	_ = showFlags.MarkHidden("policypath")
 	showFlags.StringVar(&showTrustOptions.RegistryPath, "registrypath", "", "")
+	showFlags.BoolVarP(&noHeading, "noheading", "n", false, "Do not print column headings")
 	_ = showFlags.MarkHidden("registrypath")
 }
 
@@ -64,10 +66,22 @@ func showTrust(cmd *cobra.Command, args []string) error {
 	rpt := report.New(os.Stdout, cmd.Name())
 	defer rpt.Flush()
 
+	hdrs := report.Headers(imageReporter{}, map[string]string{
+		"Transport":      "Transport",
+		"RepoName":       "Name",
+		"Type":           "Type",
+		"GPGId":          "Id",
+		"SignatureStore": "Store",
+	})
 	rpt, err = rpt.Parse(report.OriginPodman,
-		"{{range . }}{{.RepoName}}\t{{.Type}}\t{{.GPGId}}\t{{.SignatureStore}}\n{{end -}}")
+		"{{range . }}{{.Transport}}\t{{.RepoName}}\t{{.Type}}\t{{.GPGId}}\t{{.SignatureStore}}\n{{end -}}")
 	if err != nil {
 		return err
+	}
+	if !noHeading {
+		if err := rpt.Execute(hdrs); err != nil {
+			return err
+		}
 	}
 	return rpt.Execute(trust.Policies)
 }

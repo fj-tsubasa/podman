@@ -8,13 +8,13 @@ import (
 	metadata "github.com/checkpoint-restore/checkpointctl/lib"
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod"
-	ann "github.com/containers/podman/v3/pkg/annotations"
-	"github.com/containers/podman/v3/pkg/checkpoint/crutils"
-	"github.com/containers/podman/v3/pkg/criu"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/specgen/generate"
-	"github.com/containers/podman/v3/pkg/specgenutil"
+	"github.com/containers/podman/v4/libpod"
+	ann "github.com/containers/podman/v4/pkg/annotations"
+	"github.com/containers/podman/v4/pkg/checkpoint/crutils"
+	"github.com/containers/podman/v4/pkg/criu"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/specgen/generate"
+	"github.com/containers/podman/v4/pkg/specgenutil"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -78,6 +78,18 @@ func CRImportCheckpoint(ctx context.Context, runtime *libpod.Runtime, restoreOpt
 		}
 	}
 
+	if restoreOptions.IgnoreStaticIP || restoreOptions.IgnoreStaticMAC {
+		for net, opts := range ctrConfig.Networks {
+			if restoreOptions.IgnoreStaticIP {
+				opts.StaticIPs = nil
+			}
+			if restoreOptions.IgnoreStaticMAC {
+				opts.StaticMAC = nil
+			}
+			ctrConfig.Networks[net] = opts
+		}
+	}
+
 	ctrID := ctrConfig.ID
 	newName := false
 
@@ -128,6 +140,13 @@ func CRImportCheckpoint(ctx context.Context, runtime *libpod.Runtime, restoreOpt
 				return nil, errors.Errorf("pod %s does not share the network namespace", ctrConfig.Pod)
 			}
 			ctrConfig.NetNsCtr = infraContainer.ID()
+			for net, opts := range ctrConfig.Networks {
+				opts.StaticIPs = nil
+				opts.StaticMAC = nil
+				ctrConfig.Networks[net] = opts
+			}
+			ctrConfig.StaticIP = nil
+			ctrConfig.StaticMAC = nil
 		}
 
 		if ctrConfig.PIDNsCtr != "" {

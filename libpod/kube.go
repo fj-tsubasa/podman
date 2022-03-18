@@ -11,22 +11,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/env"
-	"github.com/containers/podman/v3/pkg/lookup"
-	"github.com/containers/podman/v3/pkg/namespaces"
-	"github.com/containers/podman/v3/pkg/specgen"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/env"
+	v1 "github.com/containers/podman/v4/pkg/k8s.io/api/core/v1"
+	"github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/api/resource"
+	v12 "github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/util/intstr"
+	"github.com/containers/podman/v4/pkg/lookup"
+	"github.com/containers/podman/v4/pkg/namespaces"
+	"github.com/containers/podman/v4/pkg/specgen"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // GenerateForKube takes a slice of libpod containers and generates
@@ -595,7 +595,7 @@ func containerToV1Container(ctx context.Context, c *Container) (v1.Container, []
 	// pause one and make sure it's in the storage by pulling it down if
 	// missing.
 	if image == "" && c.IsInfra() {
-		image = config.DefaultInfraImage
+		image = c.runtime.config.Engine.InfraImage
 		if _, err := c.runtime.libimageRuntime.Pull(ctx, image, config.PullPolicyMissing, nil); err != nil {
 			return kubeContainer, nil, nil, nil, err
 		}
@@ -747,7 +747,7 @@ func libpodEnvVarsToKubeEnvVars(envs []string, imageEnvs []string) ([]v1.EnvVar,
 	defaultEnv := env.DefaultEnvVariables()
 	envVars := make([]v1.EnvVar, 0, len(envs))
 	imageMap := make(map[string]string, len(imageEnvs))
-	for _, ie := range envs {
+	for _, ie := range imageEnvs {
 		split := strings.SplitN(ie, "=", 2)
 		imageMap[split[0]] = split[1]
 	}

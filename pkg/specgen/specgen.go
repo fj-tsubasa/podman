@@ -6,8 +6,8 @@ import (
 	"syscall"
 
 	"github.com/containers/common/libimage"
+	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/image/v5/manifest"
-	nettypes "github.com/containers/podman/v3/libpod/network/types"
 	"github.com/containers/storage/types"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
@@ -152,6 +152,9 @@ type ContainerBasicConfig struct {
 	// Conflicts with UtsNS if UtsNS is not set to private.
 	// Optional.
 	Hostname string `json:"hostname,omitempty"`
+	// HostUses is a list of host usernames or UIDs to add to the container
+	// /etc/passwd file
+	HostUsers []string `json:"hostusers,omitempty"`
 	// Sysctl sets kernel parameters for the container
 	Sysctl map[string]string `json:"sysctl,omitempty"`
 	// Remove indicates if the container should be removed once it has been started
@@ -201,6 +204,8 @@ type ContainerBasicConfig struct {
 	// UnsetEnvAll unsets all default environment variables from the image or from buildin
 	// Optional.
 	UnsetEnvAll bool `json:"unsetenvall,omitempty"`
+	// Passwd is a container run option that determines if we are validating users/groups before running the container
+	Passwd *bool `json:"manage_password,omitempty"`
 }
 
 // ContainerStorageConfig contains information on the storage configuration of a
@@ -218,7 +223,7 @@ type ContainerStorageConfig struct {
 	// Conflicts with Image.
 	// At least one of Image or Rootfs must be specified.
 	Rootfs string `json:"rootfs,omitempty"`
-	// RootfsOverlay tells if rootfs is actuall an overlay on top of base path
+	// RootfsOverlay tells if rootfs is actually an overlay on top of base path
 	RootfsOverlay bool `json:"rootfs_overlay,omitempty"`
 	// ImageVolumeMode indicates how image volumes will be created.
 	// Supported modes are "ignore" (do not create), "tmpfs" (create as
@@ -259,9 +264,9 @@ type ContainerStorageConfig struct {
 	// Devices are devices that will be added to the container.
 	// Optional.
 	Devices []spec.LinuxDevice `json:"devices,omitempty"`
-	// DeviceCGroupRule are device cgroup rules that allow containers
+	// DeviceCgroupRule are device cgroup rules that allow containers
 	// to use additional types of devices.
-	DeviceCGroupRule []spec.LinuxDeviceCgroup `json:"device_cgroup_rule,omitempty"`
+	DeviceCgroupRule []spec.LinuxDeviceCgroup `json:"device_cgroup_rule,omitempty"`
 	// DevicesFrom is a way to ensure your container inherits device specific information from another container
 	DevicesFrom []string `json:"devices_from,omitempty"`
 	// HostDeviceList is used to recreate the mounted device on inherited containers
@@ -296,6 +301,10 @@ type ContainerStorageConfig struct {
 	// Volatile specifies whether the container storage can be optimized
 	// at the cost of not syncing all the dirty files in memory.
 	Volatile bool `json:"volatile,omitempty"`
+	// ChrootDirs is an additional set of directories that need to be
+	// treated as root directories. Standard bind mounts will be mounted
+	// into paths relative to these directories.
+	ChrootDirs []string `json:"chroot_directories,omitempty"`
 }
 
 // ContainerSecurityConfig is a container's security features, including
@@ -385,7 +394,7 @@ type ContainerCgroupConfig struct {
 	// CgroupsMode sets a policy for how cgroups will be created in the
 	// container, including the ability to disable creation entirely.
 	CgroupsMode string `json:"cgroups_mode,omitempty"`
-	// CgroupParent is the container's CGroup parent.
+	// CgroupParent is the container's Cgroup parent.
 	// If not set, the default for the current cgroup driver will be used.
 	// Optional.
 	CgroupParent string `json:"cgroup_parent,omitempty"`
@@ -394,26 +403,10 @@ type ContainerCgroupConfig struct {
 // ContainerNetworkConfig contains information on a container's network
 // configuration.
 type ContainerNetworkConfig struct {
-	// Aliases are a list of network-scoped aliases for container
-	// Optional
-	Aliases map[string][]string `json:"aliases"`
 	// NetNS is the configuration to use for the container's network
 	// namespace.
 	// Mandatory.
 	NetNS Namespace `json:"netns,omitempty"`
-	// StaticIP is the a IPv4 address of the container.
-	// Only available if NetNS is set to Bridge.
-	// Optional.
-	StaticIP *net.IP `json:"static_ip,omitempty"`
-	// StaticIPv6 is a static IPv6 address to set in the container.
-	// Only available if NetNS is set to Bridge.
-	// Optional.
-	StaticIPv6 *net.IP `json:"static_ipv6,omitempty"`
-	// StaticMAC is a static MAC address to set in the container.
-	// Only available if NetNS is set to bridge.
-	// Optional.
-	// swagger:strfmt string
-	StaticMAC *nettypes.HardwareAddr `json:"static_mac,omitempty"`
 	// PortBindings is a set of ports to map into the container.
 	// Only available if NetNS is set to bridge or slirp.
 	// Optional.
@@ -434,12 +427,20 @@ type ContainerNetworkConfig struct {
 	// PublishExposedPorts is set.
 	// Optional.
 	Expose map[uint16]string `json:"expose,omitempty"`
+	// Map of networks names or ids that the container should join.
+	// You can request additional settings for each network, you can
+	// set network aliases, static ips, static mac address  and the
+	// network interface name for this container on the specific network.
+	// If the map is empty and the bridge network mode is set the container
+	// will be joined to the default network.
+	Networks map[string]nettypes.PerNetworkOptions
 	// CNINetworks is a list of CNI networks to join the container to.
 	// If this list is empty, the default CNI network will be joined
 	// instead. If at least one entry is present, we will not join the
 	// default network (unless it is part of this list).
 	// Only available if NetNS is set to bridge.
 	// Optional.
+	// Deprecated: as of podman 4.0 use "Networks" instead.
 	CNINetworks []string `json:"cni_networks,omitempty"`
 	// UseImageResolvConf indicates that resolv.conf should not be managed
 	// by Podman, but instead sourced from the image.

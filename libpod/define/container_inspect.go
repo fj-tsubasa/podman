@@ -6,6 +6,11 @@ import (
 	"github.com/containers/image/v5/manifest"
 )
 
+type InspectIDMappings struct {
+	UIDMap []string `json:"UidMap"`
+	GIDMap []string `json:"GidMap"`
+}
+
 // InspectContainerConfig holds further data about how a container was initially
 // configured.
 type InspectContainerConfig struct {
@@ -68,6 +73,12 @@ type InspectContainerConfig struct {
 	Timeout uint `json:"Timeout"`
 	// StopTimeout is time before container is stopped when calling stop
 	StopTimeout uint `json:"StopTimeout"`
+	// Passwd determines whether or not podman can add entries to /etc/passwd and /etc/group
+	Passwd *bool `json:"Passwd,omitempty"`
+	// ChrootDirs is an additional set of directories that need to be
+	// treated as root directories. Standard bind mounts will be mounted
+	// into paths relative to these directories.
+	ChrootDirs []string `json:"ChrootDirs,omitempty"`
 }
 
 // InspectRestartPolicy holds information about the container's restart policy.
@@ -189,22 +200,28 @@ type InspectMount struct {
 // Docker, but here we see more fields that are unused (nonsensical in the
 // context of Libpod).
 type InspectContainerState struct {
-	OciVersion   string             `json:"OciVersion"`
-	Status       string             `json:"Status"`
-	Running      bool               `json:"Running"`
-	Paused       bool               `json:"Paused"`
-	Restarting   bool               `json:"Restarting"` // TODO
-	OOMKilled    bool               `json:"OOMKilled"`
-	Dead         bool               `json:"Dead"`
-	Pid          int                `json:"Pid"`
-	ConmonPid    int                `json:"ConmonPid,omitempty"`
-	ExitCode     int32              `json:"ExitCode"`
-	Error        string             `json:"Error"` // TODO
-	StartedAt    time.Time          `json:"StartedAt"`
-	FinishedAt   time.Time          `json:"FinishedAt"`
-	Health       HealthCheckResults `json:"Health,omitempty"`
-	Checkpointed bool               `json:"Checkpointed,omitempty"`
-	CgroupPath   string             `json:"CgroupPath,omitempty"`
+	OciVersion     string             `json:"OciVersion"`
+	Status         string             `json:"Status"`
+	Running        bool               `json:"Running"`
+	Paused         bool               `json:"Paused"`
+	Restarting     bool               `json:"Restarting"` // TODO
+	OOMKilled      bool               `json:"OOMKilled"`
+	Dead           bool               `json:"Dead"`
+	Pid            int                `json:"Pid"`
+	ConmonPid      int                `json:"ConmonPid,omitempty"`
+	ExitCode       int32              `json:"ExitCode"`
+	Error          string             `json:"Error"` // TODO
+	StartedAt      time.Time          `json:"StartedAt"`
+	FinishedAt     time.Time          `json:"FinishedAt"`
+	Health         HealthCheckResults `json:"Health,omitempty"`
+	Checkpointed   bool               `json:"Checkpointed,omitempty"`
+	CgroupPath     string             `json:"CgroupPath,omitempty"`
+	CheckpointedAt time.Time          `json:"CheckpointedAt,omitempty"`
+	RestoredAt     time.Time          `json:"RestoredAt,omitempty"`
+	CheckpointLog  string             `json:"CheckpointLog,omitempty"`
+	CheckpointPath string             `json:"CheckpointPath,omitempty"`
+	RestoreLog     string             `json:"RestoreLog,omitempty"`
+	Restored       bool               `json:"Restored,omitempty"`
 }
 
 // Healthcheck returns the HealthCheckResults. This is used for old podman compat
@@ -337,9 +354,9 @@ type InspectContainerHostConfig struct {
 	// populated.
 	// TODO.
 	Cgroup string `json:"Cgroup"`
-	// Cgroups contains the container's CGroup mode.
-	// Allowed values are "default" (container is creating CGroups) and
-	// "disabled" (container is not creating CGroups).
+	// Cgroups contains the container's Cgroup mode.
+	// Allowed values are "default" (container is creating Cgroups) and
+	// "disabled" (container is not creating Cgroups).
 	// This is Libpod-specific and not included in `docker inspect`.
 	Cgroups string `json:"Cgroups"`
 	// Links is unused, and provided purely for Docker compatibility.
@@ -393,7 +410,10 @@ type InspectContainerHostConfig struct {
 	// TODO Rootless has an additional 'keep-id' option, presently not
 	// reflected here.
 	UsernsMode string `json:"UsernsMode"`
+	// IDMappings is the UIDMapping and GIDMapping used within the container
+	IDMappings *InspectIDMappings `json:"IDMappings,omitempty"`
 	// ShmSize is the size of the container's SHM device.
+
 	ShmSize int64 `json:"ShmSize"`
 	// Runtime is provided purely for Docker compatibility.
 	// It is set unconditionally to "oci" as Podman does not presently
@@ -409,7 +429,7 @@ type InspectContainerHostConfig struct {
 	Isolation string `json:"Isolation"`
 	// CpuShares indicates the CPU resources allocated to the container.
 	// It is a relative weight in the scheduler for assigning CPU time
-	// versus other CGroups.
+	// versus other Cgroups.
 	CpuShares uint64 `json:"CpuShares"`
 	// Memory indicates the memory resources allocated to the container.
 	// This is the limit (in bytes) of RAM the container may use.
@@ -426,12 +446,12 @@ type InspectContainerHostConfig struct {
 	// 100000, we will set both CpuQuota, CpuPeriod, and NanoCpus. If
 	// CpuQuota is not the default, we will not set NanoCpus.
 	NanoCpus int64 `json:"NanoCpus"`
-	// CgroupParent is the CGroup parent of the container.
+	// CgroupParent is the Cgroup parent of the container.
 	// Only set if not default.
 	CgroupParent string `json:"CgroupParent"`
 	// BlkioWeight indicates the I/O resources allocated to the container.
 	// It is a relative weight in the scheduler for assigning I/O time
-	// versus other CGroups.
+	// versus other Cgroups.
 	BlkioWeight uint16 `json:"BlkioWeight"`
 	// BlkioWeightDevice is an array of I/O resource priorities for
 	// individual device nodes.

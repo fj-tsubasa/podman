@@ -40,7 +40,7 @@ A Kubernetes PersistentVolumeClaim represents a Podman named volume. Only the Pe
 - volume.podman.io/mount-options
 
 Play kube is capable of building images on the fly given the correct directory layout and Containerfiles. This
-option is not available for remote clients yet. Consider the following excerpt from a YAML file:
+option is not available for remote clients, including Mac and Windows (excluding WSL2) machines, yet. Consider the following excerpt from a YAML file:
 ```
 apiVersion: v1
 kind: Pod
@@ -67,13 +67,16 @@ like:
 ```
 
 The build will consider `foobar` to be the context directory for the build. If there is an image in local storage
-called `foobar`, the image will not be built unless the `--build` flag is used.
+called `foobar`, the image will not be built unless the `--build` flag is used. Use `--build=false` to completely
+disable builds.
 
 `Kubernetes ConfigMap`
 
-Kubernetes ConfigMap can be referred as a source of environment variables in Pods or Deployments.
+Kubernetes ConfigMap can be referred as a source of environment variables or volumes in Pods or Deployments.
+ConfigMaps aren't a standalone object in Podman; instead, when a container uses a ConfigMap, Podman will create environment variables or volumes as needed.
 
-For example ConfigMap defined in following YAML:
+For example, the following YAML document defines a ConfigMap and then uses it in a Pod:
+
 ```
 apiVersion: v1
 kind: ConfigMap
@@ -81,14 +84,11 @@ metadata:
   name: foo
 data:
     FOO: bar
-```
-
-can be referred in a Pod in following way:
-```
+---
 apiVersion: v1
 kind: Pod
 metadata:
-...
+  name: foobar
 spec:
   containers:
   - command:
@@ -96,14 +96,19 @@ spec:
     name: container-1
     image: foobar
     envFrom:
-      - configMapRef:
-      name: foo
-      optional: false
+    - configMapRef:
+        name: foo
+        optional: false
 ```
 
 and as a result environment variable `FOO` will be set to `bar` for container `container-1`.
 
 ## OPTIONS
+
+#### **--annotation**=*key=value*
+
+Add an annotation to the container or pod. The format is key=value.
+The **--annotation** option can be set multiple times.
 
 #### **--authfile**=*path*
 
@@ -115,18 +120,22 @@ environment variable. `export REGISTRY_AUTH_FILE=path`
 
 #### **--build**
 
-Build images even if they are found in the local storage.
+Build images even if they are found in the local storage. Use `--build=false` to completely disable builds. (This option is not available with the remote Podman client)
 
 #### **--cert-dir**=*path*
 
 Use certificates at *path* (\*.crt, \*.cert, \*.key) to connect to the registry. (Default: /etc/containers/certs.d)
-Please refer to containers-certs.d(5) for details. (This option is not available with the remote Podman client)
+Please refer to containers-certs.d(5) for details. (This option is not available with the remote Podman client, including Mac and Windows (excluding WSL2) machines)
 
 #### **--configmap**=*path*
 
-Use Kubernetes configmap YAML at path to provide a source for environment variable values within the containers of the pod.
+Use Kubernetes configmap YAML at path to provide a source for environment variable values within the containers of the pod.  (This option is not available with the remote Podman client)
 
 Note: The *--configmap* option can be used multiple times or a comma-separated list of paths can be used to pass multiple Kubernetes configmap YAMLs.
+
+#### **--context-dir**=*path*
+
+Use *path* as the build context directory for each image. Requires --build option be true. (This option is not available with the remote Podman client)
 
 #### **--creds**
 
@@ -142,6 +151,7 @@ removed.  Any volumes created are left intact.
 #### **--ip**=*IP address*
 
 Assign a static ip address to the pod. This option can be specified several times when play kube creates more than one pod.
+Note: When joining multiple networks you should use the **--network name:ip=\<ip\>** syntax.
 
 #### **--log-driver**=driver
 
@@ -167,15 +177,24 @@ This option is currently supported only by the **journald** log driver.
 #### **--mac-address**=*MAC address*
 
 Assign a static mac address to the pod. This option can be specified several times when play kube creates more than one pod.
+Note: When joining multiple networks you should use the **--network name:mac=\<mac\>** syntax.
 
 #### **--network**=*mode*, **--net**
 
-Change the network mode of the pod. The host and bridge network mode should be configured in the yaml file.
+Change the network mode of the pod. The host network mode should be configured in the YAML file.
 Valid _mode_ values are:
 
+- **bridge[:OPTIONS,...]**: Create a network stack on the default bridge. This is the default for rootfull containers. It is possible to specify these additional options:
+  - **alias=name**: Add network-scoped alias for the container.
+  - **ip=IPv4**: Specify a static ipv4 address for this container.
+  - **ip=IPv6**: Specify a static ipv6 address for this container.
+  - **mac=MAC**: Specify a static mac address for this container.
+  - **interface_name**: Specify a name for the created network interface inside the container.
+
+  For example to set a static ipv4 address and a static mac address, use `--network bridge:ip=10.88.0.10,mac=44:33:22:11:00:99`.
+- \<network name or ID\>[:OPTIONS,...]: Connect to a user-defined network; this is the network name or ID from a network created by **[podman network create](podman-network-create.1.md)**. Using the network name implies the bridge network mode. It is possible to specify the same options described under the bridge mode above. You can use the **--network** option multiple times to specify additional networks.
 - **none**: Create a network namespace for the container but do not configure network interfaces for it, thus the container has no network connectivity.
 - **container:**_id_: Reuse another container's network stack.
-- **network**: Connect to a user-defined network, multiple networks should be comma-separated.
 - **ns:**_path_: Path to a network namespace to join.
 - **private**: Create a new namespace for the container. This will use the **bridge** mode for rootfull containers and **slirp4netns** for rootless ones.
 - **slirp4netns[:OPTIONS,...]**: use **slirp4netns**(1) to create a user network stack. This is the default for rootless containers. It is possible to specify these additional options:
@@ -188,7 +207,7 @@ Valid _mode_ values are:
   - **outbound_addr6=INTERFACE**: Specify the outbound interface slirp should bind to (ipv6 traffic only).
   - **outbound_addr6=IPv6**: Specify the outbound ipv6 address slirp should bind to.
   - **port_handler=rootlesskit**: Use rootlesskit for port forwarding. Default.
-  Note: Rootlesskit changes the source IP address of incoming packets to a IP address in the container network namespace, usually `10.0.2.100`. If your application requires the real source IP address, e.g. web server logs, use the slirp4netns port handler. The rootlesskit port handler is also used for rootless containers when connected to user-defined networks.
+  Note: Rootlesskit changes the source IP address of incoming packets to an IP address in the container network namespace, usually `10.0.2.100`. If your application requires the real source IP address, e.g. web server logs, use the slirp4netns port handler. The rootlesskit port handler is also used for rootless containers when connected to user-defined networks.
   - **port_handler=slirp4netns**: Use the slirp4netns port forwarding, it is slower than rootlesskit but preserves the correct source IP address. This port handler cannot be used for user-defined networks.
 
 #### **--no-hosts**
@@ -205,7 +224,7 @@ Tears down the pods created by a previous run of `play kube` and recreates the p
 
 #### **--seccomp-profile-root**=*path*
 
-Directory path for seccomp profiles (default: "/var/lib/kubelet/seccomp"). (This option is not available with the remote Podman client)
+Directory path for seccomp profiles (default: "/var/lib/kubelet/seccomp"). (This option is not available with the remote Podman client, including Mac and Windows (excluding WSL2) machines)
 
 #### **--start**
 
@@ -253,9 +272,9 @@ $ podman play kube demo.yml --configmap configmap-foo.yml --configmap configmap-
 52182811df2b1e73f36476003a66ec872101ea59034ac0d4d3a7b40903b955a6
 ```
 
-CNI network(s) can be specified as comma-separated list using ``--network``
+Create a pod connected to two networks (called net1 and net2) with a static ip
 ```
-$ podman play kube demo.yml --network cni1,cni2
+$ podman play kube demo.yml --network net1:ip=10.89.1.5 --network net2:ip=10.89.10.10
 52182811df2b1e73f36476003a66ec872101ea59034ac0d4d3a7b40903b955a6
 ```
 

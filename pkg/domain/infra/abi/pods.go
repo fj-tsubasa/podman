@@ -3,12 +3,12 @@ package abi
 import (
 	"context"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	dfilters "github.com/containers/podman/v3/pkg/domain/filters"
-	"github.com/containers/podman/v3/pkg/signal"
-	"github.com/containers/podman/v3/pkg/specgen/generate"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	dfilters "github.com/containers/podman/v4/pkg/domain/filters"
+	"github.com/containers/podman/v4/pkg/signal"
+	"github.com/containers/podman/v4/pkg/specgen/generate"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -325,7 +325,7 @@ func (ic *ContainerEngine) PodPs(ctx context.Context, options entities.PodPSOpti
 
 	filters := make([]libpod.PodFilter, 0, len(options.Filters))
 	for k, v := range options.Filters {
-		f, err := dfilters.GeneratePodFilterFunc(k, v)
+		f, err := dfilters.GeneratePodFilterFunc(k, v, ic.Libpod)
 		if err != nil {
 			return nil, err
 		}
@@ -376,7 +376,7 @@ func (ic *ContainerEngine) PodPs(ctx context.Context, options entities.PodPSOpti
 			if err != nil {
 				return nil, err
 			}
-			networks, _, err = infra.Networks()
+			networks, err = infra.Networks()
 			if err != nil {
 				return nil, err
 			}

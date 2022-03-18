@@ -8,12 +8,12 @@ import (
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/auth"
-	"github.com/containers/podman/v3/pkg/channel"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/auth"
+	"github.com/containers/podman/v4/pkg/channel"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -41,8 +41,7 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -53,7 +52,7 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 
 	// Make sure that the reference has no transport or the docker one.
 	if err := utils.IsRegistryReference(query.Reference); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -68,9 +67,9 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Do the auth dance.
-	authConf, authfile, key, err := auth.GetCredentials(r)
+	authConf, authfile, err := auth.GetCredentials(r)
 	if err != nil {
-		utils.Error(w, "failed to retrieve repository credentials", http.StatusBadRequest, errors.Wrapf(err, "failed to parse %q header for %s", key, r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 	defer auth.RemoveAuthfile(authfile)
@@ -89,7 +88,7 @@ func ImagesPull(w http.ResponseWriter, r *http.Request) {
 
 	pullPolicy, err := config.ParsePullPolicy(query.PullPolicy)
 	if err != nil {
-		utils.Error(w, "failed to parse pull policy", http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 

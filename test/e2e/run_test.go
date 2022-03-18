@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/pkg/rootless"
-	. "github.com/containers/podman/v3/test/utils"
+	"github.com/containers/podman/v4/pkg/rootless"
+	. "github.com/containers/podman/v4/test/utils"
 	"github.com/containers/storage/pkg/stringid"
 	"github.com/mrunalp/fileutils"
 	. "github.com/onsi/ginkgo"
@@ -386,31 +386,31 @@ var _ = Describe("Podman run", func() {
 
 		SkipIfCgroupV1("podman umask on /sys/fs/cgroup will fail with cgroups V1")
 		SkipIfRootless("/sys/fs/cgroup rw access is needed")
-		rwOnCGroups := "/sys/fs/cgroup cgroup2 rw"
+		rwOnCgroups := "/sys/fs/cgroup cgroup2 rw"
 		session := podmanTest.Podman([]string{"run", "--security-opt", "unmask=ALL", "--security-opt", "mask=/sys/fs/cgroup", ALPINE, "cat", "/proc/mounts"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(ContainSubstring(rwOnCGroups))
+		Expect(session.OutputToString()).To(ContainSubstring(rwOnCgroups))
 
 		session = podmanTest.Podman([]string{"run", "--security-opt", "unmask=/sys/fs/cgroup", ALPINE, "cat", "/proc/mounts"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(ContainSubstring(rwOnCGroups))
+		Expect(session.OutputToString()).To(ContainSubstring(rwOnCgroups))
 
 		session = podmanTest.Podman([]string{"run", "--security-opt", "unmask=/sys/fs/cgroup///", ALPINE, "cat", "/proc/mounts"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(ContainSubstring(rwOnCGroups))
+		Expect(session.OutputToString()).To(ContainSubstring(rwOnCgroups))
 
 		session = podmanTest.Podman([]string{"run", "--security-opt", "unmask=ALL", ALPINE, "cat", "/proc/mounts"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(ContainSubstring(rwOnCGroups))
+		Expect(session.OutputToString()).To(ContainSubstring(rwOnCgroups))
 
 		session = podmanTest.Podman([]string{"run", "--security-opt", "unmask=/sys/fs/cgroup", "--security-opt", "mask=/sys/fs/cgroup", ALPINE, "cat", "/proc/mounts"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		Expect(session.OutputToString()).To(ContainSubstring(rwOnCGroups))
+		Expect(session.OutputToString()).To(ContainSubstring(rwOnCgroups))
 
 		session = podmanTest.Podman([]string{"run", "--security-opt", "unmask=/sys/fs/cgroup", ALPINE, "ls", "/sys/fs/cgroup"})
 		session.WaitWithDefaultTimeout()
@@ -1315,7 +1315,7 @@ USER mail`, BB)
 		Expect(err).To(BeNil())
 		file.Close()
 
-		session := podmanTest.Podman([]string{"run", "-dt", "--restart", "always", "-v", fmt.Sprintf("%s:/tmp/runroot:Z", testDir), ALPINE, "sh", "-c", "date +%N > /tmp/runroot/ran && while test -r /tmp/runroot/running; do sleep 0.1s; done"})
+		session := podmanTest.Podman([]string{"run", "-dt", "--restart", "always", "-v", fmt.Sprintf("%s:/tmp/runroot:Z", testDir), ALPINE, "sh", "-c", "touch /tmp/runroot/ran && while test -r /tmp/runroot/running; do sleep 0.1s; done"})
 
 		found := false
 		testFile := filepath.Join(testDir, "ran")
@@ -1925,5 +1925,15 @@ WORKDIR /madethis`, BB)
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("i686"))
+	})
+
+	It("podman run /dev/shm has nosuid,noexec,nodev", func() {
+		session := podmanTest.Podman([]string{"run", ALPINE, "grep", "/dev/shm", "/proc/self/mountinfo"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		output := session.OutputToString()
+		Expect(output).To(ContainSubstring("nosuid"))
+		Expect(output).To(ContainSubstring("noexec"))
+		Expect(output).To(ContainSubstring("nodev"))
 	})
 })

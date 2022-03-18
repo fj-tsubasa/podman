@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"github.com/containers/podman/v3/pkg/api/handlers/compat"
-	"github.com/containers/podman/v3/pkg/api/handlers/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/compat"
+	"github.com/containers/podman/v4/pkg/api/handlers/libpod"
 	"github.com/gorilla/mux"
 )
 
@@ -61,7 +61,10 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    description: Image content if fromSrc parameter was used
 	// responses:
 	//   200:
-	//     $ref: "#/responses/ok"
+	//     description: "no error"
+	//     schema:
+	//       type: "string"
+	//       format: "binary"
 	//   404:
 	//     $ref: "#/responses/NoSuchImage"
 	//   500:
@@ -457,6 +460,10 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    name: changes
 	//    type: string
 	//    description: instructions to apply while committing in Dockerfile format
+	//  - in: query
+	//    name: squash
+	//    type: boolean
+	//    description: squash newly built layers into a single new layer
 	// produces:
 	// - application/json
 	// responses:
@@ -840,7 +847,7 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//     $ref: "#/responses/LibpodImageSummaryResponse"
 	//   500:
 	//     $ref: '#/responses/InternalError'
-	r.Handle(VersionedPath("/libpod/images/json"), s.APIHandler(libpod.GetImages)).Methods(http.MethodGet)
+	r.Handle(VersionedPath("/libpod/images/json"), s.APIHandler(compat.GetImages)).Methods(http.MethodGet)
 	// swagger:operation POST /libpod/images/load libpod ImageLoadLibpod
 	// ---
 	// tags:
@@ -1388,6 +1395,14 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    default: latest
 	//    description: A name and optional tag to apply to the image in the `name:tag` format.  If you omit the tag the default latest value is assumed. You can provide several t parameters.
 	//  - in: query
+	//    name: allplatforms
+	//    type: boolean
+	//    default: false
+	//    description: |
+	//      Instead of building for a set of platforms specified using the platform option, inspect the build's base images,
+	//      and build for all of the platforms that are available.  Stages that use *scratch* as a starting point can not be inspected,
+	//      so at least one non-*scratch* stage must be present for detection to work usefully.
+	//  - in: query
 	//    name: extrahosts
 	//    type: string
 	//    default:
@@ -1570,6 +1585,12 @@ func (s *APIServer) registerImagesHandlers(r *mux.Router) error {
 	//    description: |
 	//      Inject http proxy environment variables into container
 	//      (As of version 2.0.0)
+	//  - in: query
+	//    name: unsetenv
+	//    description: Unset environment variables from the final image.
+	//    type: array
+	//    items:
+	//      type: string
 	// produces:
 	// - application/json
 	// responses:

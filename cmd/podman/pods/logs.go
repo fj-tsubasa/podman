@@ -4,12 +4,12 @@ import (
 	"os"
 
 	"github.com/containers/common/pkg/completion"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
@@ -87,6 +87,7 @@ func logsFlags(cmd *cobra.Command) {
 	flags.Int64Var(&logsPodOptions.Tail, tailFlagName, -1, "Output the specified number of LINES at the end of the logs.")
 	_ = cmd.RegisterFlagCompletionFunc(tailFlagName, completion.AutocompleteNone)
 
+	flags.BoolVarP(&logsPodOptions.Names, "names", "n", false, "Output container names instead of container IDs in the log")
 	flags.BoolVarP(&logsPodOptions.Timestamps, "timestamps", "t", false, "Output the timestamps in the log")
 	flags.SetInterspersed(false)
 	_ = flags.MarkHidden("details")

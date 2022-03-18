@@ -4,10 +4,10 @@ import (
 	"os"
 
 	"github.com/containers/common/pkg/parse"
-	"github.com/containers/podman/v3/libpod"
+	"github.com/containers/podman/v4/libpod"
+	v1 "github.com/containers/podman/v4/pkg/k8s.io/api/core/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -122,7 +122,7 @@ func VolumeFromConfigMap(configMapVolumeSource *v1.ConfigMapVolumeSource, config
 
 	if configMap == nil {
 		// If the volumeSource was optional, move on even if a matching configmap wasn't found
-		if *configMapVolumeSource.Optional {
+		if configMapVolumeSource.Optional != nil && *configMapVolumeSource.Optional {
 			kv.Source = configMapVolumeSource.Name
 			kv.Optional = *configMapVolumeSource.Optional
 			return kv, nil

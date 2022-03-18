@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containers/podman/v3/libpod/events"
-	. "github.com/containers/podman/v3/test/utils"
+	"github.com/containers/podman/v4/libpod/events"
+	. "github.com/containers/podman/v4/test/utils"
 	"github.com/containers/storage/pkg/stringid"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -62,6 +62,8 @@ var _ = Describe("Podman events", func() {
 		result.WaitWithDefaultTimeout()
 		Expect(result).Should(Exit(0))
 		Expect(len(result.OutputToStringArray())).To(BeNumerically(">=", 1), "Number of events")
+		date := time.Now().Format("2006-01-02")
+		Expect(result.OutputToStringArray()).To(ContainElement(HavePrefix(date)), "event log has correct timestamp")
 	})
 
 	It("podman events with an event filter and container=cid", func() {

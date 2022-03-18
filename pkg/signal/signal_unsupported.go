@@ -1,4 +1,4 @@
-// +build !linux
+// +build !aix,!darwin,!dragonfly,!freebsd,!linux,!netbsd,!openbsd,!solaris,!zos
 
 // Signal handling for Linux only.
 package signal

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/containers/buildah"
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -60,7 +60,7 @@ var _ = Describe("Podman build", func() {
 	})
 
 	It("podman build with a secret from file", func() {
-		session := podmanTest.Podman([]string{"build", "-f", "build/Dockerfile.with-secret", "-t", "secret-test", "--secret", "id=mysecret,src=build/secret.txt", "build/"})
+		session := podmanTest.Podman([]string{"build", "-f", "build/Containerfile.with-secret", "-t", "secret-test", "--secret", "id=mysecret,src=build/secret.txt", "build/"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("somesecret"))
@@ -71,7 +71,7 @@ var _ = Describe("Podman build", func() {
 	})
 
 	It("podman build with multiple secrets from files", func() {
-		session := podmanTest.Podman([]string{"build", "-f", "build/Dockerfile.with-multiple-secret", "-t", "multiple-secret-test", "--secret", "id=mysecret,src=build/secret.txt", "--secret", "id=mysecret2,src=build/anothersecret.txt", "build/"})
+		session := podmanTest.Podman([]string{"build", "-f", "build/Containerfile.with-multiple-secret", "-t", "multiple-secret-test", "--secret", "id=mysecret,src=build/secret.txt", "--secret", "id=mysecret2,src=build/anothersecret.txt", "build/"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("somesecret"))
@@ -83,7 +83,7 @@ var _ = Describe("Podman build", func() {
 	})
 
 	It("podman build with a secret from file and verify if secret file is not leaked into image", func() {
-		session := podmanTest.Podman([]string{"build", "-f", "build/Dockerfile.with-secret-verify-leak", "-t", "secret-test-leak", "--secret", "id=mysecret,src=build/secret.txt", "build/"})
+		session := podmanTest.Podman([]string{"build", "-f", "build/secret-verify-leak/Containerfile.with-secret-verify-leak", "-t", "secret-test-leak", "--secret", "id=mysecret,src=build/secret.txt", "build/"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(ContainSubstring("somesecret"))
@@ -100,7 +100,7 @@ var _ = Describe("Podman build", func() {
 
 	It("podman build with logfile", func() {
 		logfile := filepath.Join(podmanTest.TempDir, "logfile")
-		session := podmanTest.Podman([]string{"build", "--pull-never", "--tag", "test", "--logfile", logfile, "build/basicalpine"})
+		session := podmanTest.Podman([]string{"build", "--pull=never", "--tag", "test", "--logfile", logfile, "build/basicalpine"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
@@ -123,7 +123,7 @@ var _ = Describe("Podman build", func() {
 	// If the context directory is pointing at a file and not a directory,
 	// that's a no no, fail out.
 	It("podman build context directory a file", func() {
-		session := podmanTest.Podman([]string{"build", "--pull-never", "build/context_dir_a_file"})
+		session := podmanTest.Podman([]string{"build", "--pull=never", "build/context_dir_a_file"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(125))
 	})
@@ -238,19 +238,38 @@ var _ = Describe("Podman build", func() {
 		Expect("sha256:" + data[0].ID).To(Equal(string(id)))
 	})
 
-	It("podman Test PATH in built image", func() {
+	It("podman Test PATH and reserved annotation in built image", func() {
 		path := "/tmp:/bin:/usr/bin:/usr/sbin"
 		session := podmanTest.Podman([]string{
-			"build", "--pull-never", "-f", "build/basicalpine/Containerfile.path", "-t", "test-path",
+			"build", "--annotation", "io.podman.annotations.seccomp=foobar", "--pull-never", "-f", "build/basicalpine/Containerfile.path", "-t", "test-path",
 		})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 
-		session = podmanTest.Podman([]string{"run", "test-path", "printenv", "PATH"})
+		session = podmanTest.Podman([]string{"run", "--name", "foobar", "test-path", "printenv", "PATH"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		stdoutLines := session.OutputToStringArray()
 		Expect(stdoutLines[0]).Should(Equal(path))
+
+		// Reserved annotation should not be applied from the image to the container.
+		session = podmanTest.Podman([]string{"inspect", "foobar"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).NotTo(ContainSubstring("io.podman.annotations.seccomp"))
+	})
+
+	It("podman build where workdir is a symlink and run without creating new workdir", func() {
+		session := podmanTest.Podman([]string{
+			"build", "-f", "build/workdir-symlink/Dockerfile", "-t", "test-symlink",
+		})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"run", "--workdir", "/tmp/link", "test-symlink"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(session.OutputToString()).To(ContainSubstring("hello"))
 	})
 
 	It("podman build --http_proxy flag", func() {
@@ -273,6 +292,23 @@ RUN printenv http_proxy`, ALPINE)
 		os.Unsetenv("http_proxy")
 	})
 
+	It("podman build relay exit code to process", func() {
+		if IsRemote() {
+			podmanTest.StopRemoteService()
+			podmanTest.StartRemoteService()
+		}
+		podmanTest.AddImageToRWStore(ALPINE)
+		dockerfile := fmt.Sprintf(`FROM %s
+RUN exit 5`, ALPINE)
+
+		dockerfilePath := filepath.Join(podmanTest.TempDir, "Dockerfile")
+		err := ioutil.WriteFile(dockerfilePath, []byte(dockerfile), 0755)
+		Expect(err).To(BeNil())
+		session := podmanTest.Podman([]string{"build", "-t", "error-test", "--file", dockerfilePath, podmanTest.TempDir})
+		session.Wait(120)
+		Expect(session).Should(Exit(5))
+	})
+
 	It("podman build and check identity", func() {
 		session := podmanTest.Podman([]string{"build", "--pull-never", "-f", "build/basicalpine/Containerfile.path", "--no-cache", "-t", "test", "build/basicalpine"})
 		session.WaitWithDefaultTimeout()
@@ -282,6 +318,30 @@ RUN printenv http_proxy`, ALPINE)
 		inspect := podmanTest.Podman([]string{"image", "inspect", "--format", "{{ index .Config.Labels }}", "test"})
 		inspect.WaitWithDefaultTimeout()
 		data := inspect.OutputToString()
+		Expect(data).To(ContainSubstring(buildah.Version))
+	})
+
+	It("podman build and check identity with always", func() {
+		// with --pull=always
+		session := podmanTest.Podman([]string{"build", "--pull=always", "-f", "build/basicalpine/Containerfile.path", "--no-cache", "-t", "test1", "build/basicalpine"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		// Verify that OS and Arch are being set
+		inspect := podmanTest.Podman([]string{"image", "inspect", "--format", "{{ index .Config.Labels }}", "test1"})
+		inspect.WaitWithDefaultTimeout()
+		data := inspect.OutputToString()
+		Expect(data).To(ContainSubstring(buildah.Version))
+
+		// with --pull-always
+		session = podmanTest.Podman([]string{"build", "--pull-always", "-f", "build/basicalpine/Containerfile.path", "--no-cache", "-t", "test2", "build/basicalpine"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		// Verify that OS and Arch are being set
+		inspect = podmanTest.Podman([]string{"image", "inspect", "--format", "{{ index .Config.Labels }}", "test2"})
+		inspect.WaitWithDefaultTimeout()
+		data = inspect.OutputToString()
 		Expect(data).To(ContainSubstring(buildah.Version))
 	})
 
@@ -646,7 +706,7 @@ RUN ls /dev/fuse`, ALPINE)
 		Expect(err).To(BeNil())
 		session := podmanTest.Podman([]string{"build", "--pull-never", "-t", "test", "--file", containerfilePath, podmanTest.TempDir})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
+		Expect(session).Should(Exit(1))
 
 		session = podmanTest.Podman([]string{"build", "--pull-never", "--device", "/dev/fuse", "-t", "test", "--file", containerfilePath, podmanTest.TempDir})
 		session.WaitWithDefaultTimeout()
@@ -662,10 +722,25 @@ RUN ls /dev/test1`, ALPINE)
 		Expect(err).To(BeNil())
 		session := podmanTest.Podman([]string{"build", "--pull-never", "-t", "test", "--file", containerfilePath, podmanTest.TempDir})
 		session.WaitWithDefaultTimeout()
-		Expect(session).Should(Exit(125))
+		Expect(session).Should(Exit(1))
 
 		session = podmanTest.Podman([]string{"build", "--pull-never", "--device", "/dev/zero:/dev/test1", "-t", "test", "--file", containerfilePath, podmanTest.TempDir})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
+	})
+
+	It("podman build use absolute path even if given relative", func() {
+		containerFile := fmt.Sprintf(`FROM %s`, ALPINE)
+		err = os.Mkdir("relative", 0755)
+		Expect(err).To(BeNil())
+		containerFilePath := filepath.Join("relative", "Containerfile")
+		fmt.Println(containerFilePath)
+		err = ioutil.WriteFile(containerFilePath, []byte(containerFile), 0755)
+		Expect(err).To(BeNil())
+		build := podmanTest.Podman([]string{"build", "-f", "./relative/Containerfile"})
+		build.WaitWithDefaultTimeout()
+		Expect(build).To(Exit(0))
+		err = os.RemoveAll("relative")
+		Expect(err).To(BeNil())
 	})
 })

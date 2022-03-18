@@ -2,14 +2,20 @@ package kube
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
+	"runtime"
+	"strconv"
 	"testing"
 
 	"github.com/containers/common/pkg/secrets"
+	v1 "github.com/containers/podman/v4/pkg/k8s.io/api/core/v1"
+	"github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/api/resource"
+	v12 "github.com/containers/podman/v4/pkg/k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/docker/docker/pkg/system"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
-	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func createSecrets(t *testing.T, d string) *secrets.SecretsManager {
@@ -189,6 +195,11 @@ func TestEnvVarValue(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.RemoveAll(d)
 	secretsManager := createSecrets(t, d)
+	stringNumCPUs := strconv.Itoa(runtime.NumCPU())
+
+	mi, err := system.ReadMemInfo()
+	assert.Nil(t, err)
+	stringMemTotal := strconv.FormatInt(mi.MemTotal, 10)
 
 	tests := []struct {
 		name     string
@@ -233,7 +244,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: configMapList,
 			},
 			false,
-			"",
+			nilString,
 		},
 		{
 			"OptionalContainerKeyDoesNotExistInConfigMap",
@@ -253,7 +264,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: configMapList,
 			},
 			true,
-			"",
+			nilString,
 		},
 		{
 			"ConfigMapDoesNotExist",
@@ -272,7 +283,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: configMapList,
 			},
 			false,
-			"",
+			nilString,
 		},
 		{
 			"OptionalConfigMapDoesNotExist",
@@ -292,7 +303,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: configMapList,
 			},
 			true,
-			"",
+			nilString,
 		},
 		{
 			"EmptyConfigMapList",
@@ -311,7 +322,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: []v1.ConfigMap{},
 			},
 			false,
-			"",
+			nilString,
 		},
 		{
 			"OptionalEmptyConfigMapList",
@@ -331,7 +342,7 @@ func TestEnvVarValue(t *testing.T) {
 				ConfigMaps: []v1.ConfigMap{},
 			},
 			true,
-			"",
+			nilString,
 		},
 		{
 			"SecretExists",
@@ -369,7 +380,7 @@ func TestEnvVarValue(t *testing.T) {
 				SecretsManager: secretsManager,
 			},
 			false,
-			"",
+			nilString,
 		},
 		{
 			"OptionalContainerKeyDoesNotExistInSecret",
@@ -389,7 +400,7 @@ func TestEnvVarValue(t *testing.T) {
 				SecretsManager: secretsManager,
 			},
 			true,
-			"",
+			nilString,
 		},
 		{
 			"SecretDoesNotExist",
@@ -408,7 +419,7 @@ func TestEnvVarValue(t *testing.T) {
 				SecretsManager: secretsManager,
 			},
 			false,
-			"",
+			nilString,
 		},
 		{
 			"OptionalSecretDoesNotExist",
@@ -428,7 +439,339 @@ func TestEnvVarValue(t *testing.T) {
 				SecretsManager: secretsManager,
 			},
 			true,
+			nilString,
+		},
+		{
+			"FieldRefMetadataName",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.name",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				PodName: "test",
+			},
+			true,
+			"test",
+		},
+		{
+			"FieldRefMetadataUID",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.uid",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				PodID: "ec71ff37c67b688598c0008187ab0960dc34e1dfdcbf3a74e3d778bafcfe0977",
+			},
+			true,
+			"ec71ff37c67b688598c0008187ab0960dc34e1dfdcbf3a74e3d778bafcfe0977",
+		},
+		{
+			"FieldRefMetadataLabelsExist",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.labels['label']",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Labels: map[string]string{"label": "label"},
+			},
+			true,
+			"label",
+		},
+		{
+			"FieldRefMetadataLabelsEmpty",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.labels['label']",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Labels: map[string]string{"label": ""},
+			},
+			true,
 			"",
+		},
+		{
+			"FieldRefMetadataLabelsNotExist",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.labels['label']",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			true,
+			"",
+		},
+		{
+			"FieldRefMetadataAnnotationsExist",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.annotations['annotation']",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Annotations: map[string]string{"annotation": "annotation"},
+			},
+			true,
+			"annotation",
+		},
+		{
+			"FieldRefMetadataAnnotationsEmpty",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.annotations['annotation']",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Annotations: map[string]string{"annotation": ""},
+			},
+			true,
+			"",
+		},
+		{
+			"FieldRefMetadataAnnotationsNotExist",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.annotations['annotation']",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			true,
+			"",
+		},
+		{
+			"FieldRefInvalid1",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.annotations['annotation]",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"FieldRefInvalid2",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.dummy['annotation']",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"FieldRefNotSupported",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: "metadata.namespace",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"ResourceFieldRefNotSupported",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.dummy",
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"ResourceFieldRefMemoryDivisorNotValid",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.memory",
+						Divisor:  resource.MustParse("2M"),
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"ResourceFieldRefCpuDivisorNotValid",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.cpu",
+						Divisor:  resource.MustParse("2m"),
+					},
+				},
+			},
+			CtrSpecGenOptions{},
+			false,
+			nilString,
+		},
+		{
+			"ResourceFieldRefNoDivisor",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.memory",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: container,
+			},
+			true,
+			memoryString,
+		},
+		{
+			"ResourceFieldRefMemoryDivisor",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.memory",
+						Divisor:  resource.MustParse("1Mi"),
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: container,
+			},
+			true,
+			strconv.Itoa(int(math.Ceil(float64(memoryInt) / 1024 / 1024))),
+		},
+		{
+			"ResourceFieldRefCpuDivisor",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "requests.cpu",
+						Divisor:  resource.MustParse("1m"),
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: container,
+			},
+			true,
+			strconv.Itoa(int(float64(cpuInt) / 0.001)),
+		},
+		{
+			"ResourceFieldRefNoLimitMemory",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.memory",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: v1.Container{
+					Name: "test",
+				},
+			},
+			true,
+			stringMemTotal,
+		},
+		{
+			"ResourceFieldRefNoRequestMemory",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "requests.memory",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: v1.Container{
+					Name: "test",
+				},
+			},
+			true,
+			stringMemTotal,
+		},
+		{
+			"ResourceFieldRefNoLimitCPU",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "limits.cpu",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: v1.Container{
+					Name: "test",
+				},
+			},
+			true,
+			stringNumCPUs,
+		},
+		{
+			"ResourceFieldRefNoRequestCPU",
+			v1.EnvVar{
+				Name: "FOO",
+				ValueFrom: &v1.EnvVarSource{
+					ResourceFieldRef: &v1.ResourceFieldSelector{
+						Resource: "requests.cpu",
+					},
+				},
+			},
+			CtrSpecGenOptions{
+				Container: v1.Container{
+					Name: "test",
+				},
+			},
+			true,
+			stringNumCPUs,
 		},
 	}
 
@@ -437,59 +780,85 @@ func TestEnvVarValue(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := envVarValue(test.envVar, &test.options)
 			assert.Equal(t, err == nil, test.succeed)
-			assert.Equal(t, test.expected, result)
+			if test.expected == nilString {
+				assert.Nil(t, result)
+			} else {
+				fmt.Println(*result, test.expected)
+				assert.Equal(t, &(test.expected), result)
+			}
 		})
 	}
 }
 
-var configMapList = []v1.ConfigMap{
-	{
-		TypeMeta: v12.TypeMeta{
-			Kind: "ConfigMap",
+var (
+	nilString     = "<nil>"
+	configMapList = []v1.ConfigMap{
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "bar",
+			},
+			Data: map[string]string{
+				"myvar": "bar",
+			},
 		},
-		ObjectMeta: v12.ObjectMeta{
-			Name: "bar",
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "ConfigMap",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "foo",
+			},
+			Data: map[string]string{
+				"myvar": "foo",
+			},
 		},
-		Data: map[string]string{
-			"myvar": "bar",
-		},
-	},
-	{
-		TypeMeta: v12.TypeMeta{
-			Kind: "ConfigMap",
-		},
-		ObjectMeta: v12.ObjectMeta{
-			Name: "foo",
-		},
-		Data: map[string]string{
-			"myvar": "foo",
-		},
-	},
-}
+	}
 
-var optional = true
+	optional = true
 
-var k8sSecrets = []v1.Secret{
-	{
-		TypeMeta: v12.TypeMeta{
-			Kind: "Secret",
+	k8sSecrets = []v1.Secret{
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "Secret",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "bar",
+			},
+			Data: map[string][]byte{
+				"myvar": []byte("bar"),
+			},
 		},
-		ObjectMeta: v12.ObjectMeta{
-			Name: "bar",
+		{
+			TypeMeta: v12.TypeMeta{
+				Kind: "Secret",
+			},
+			ObjectMeta: v12.ObjectMeta{
+				Name: "foo",
+			},
+			Data: map[string][]byte{
+				"myvar": []byte("foo"),
+			},
 		},
-		Data: map[string][]byte{
-			"myvar": []byte("bar"),
+	}
+
+	cpuInt       = 4
+	cpuString    = strconv.Itoa(cpuInt)
+	memoryInt    = 30000000
+	memoryString = strconv.Itoa(memoryInt)
+	container    = v1.Container{
+		Name: "test",
+		Resources: v1.ResourceRequirements{
+			Limits: v1.ResourceList{
+				v1.ResourceCPU:    resource.MustParse(cpuString),
+				v1.ResourceMemory: resource.MustParse(memoryString),
+			},
+			Requests: v1.ResourceList{
+				v1.ResourceCPU:    resource.MustParse(cpuString),
+				v1.ResourceMemory: resource.MustParse(memoryString),
+			},
 		},
-	},
-	{
-		TypeMeta: v12.TypeMeta{
-			Kind: "Secret",
-		},
-		ObjectMeta: v12.ObjectMeta{
-			Name: "foo",
-		},
-		Data: map[string][]byte{
-			"myvar": []byte("foo"),
-		},
-	},
-}
+	}
+)

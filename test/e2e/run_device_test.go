@@ -4,7 +4,7 @@ import (
 	"os"
 	"os/exec"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -44,6 +44,11 @@ var _ = Describe("Podman run device", func() {
 		session := podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", "--device", "/dev/kmsg", ALPINE, "test", "-c", "/dev/kmsg"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
+		if !isRootless() {
+			session = podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", "--device", "/dev/kmsg", "--cap-add", "SYS_ADMIN", ALPINE, "head", "-n", "1", "/dev/kmsg"})
+			session.WaitWithDefaultTimeout()
+			Expect(session).Should(Exit(0))
+		}
 	})
 
 	It("podman run device rename test", func() {
@@ -109,7 +114,7 @@ var _ = Describe("Podman run device", func() {
 		err = cmd.Run()
 		Expect(err).To(BeNil())
 
-		session := podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", "--device", "myKmsg", ALPINE, "test", "-c", "/dev/kmsg1"})
+		session := podmanTest.Podman([]string{"run", "-q", "--security-opt", "label=disable", "--device", "vendor.com/device=myKmsg", ALPINE, "test", "-c", "/dev/kmsg1"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})
@@ -119,4 +124,11 @@ var _ = Describe("Podman run device", func() {
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 	})
+
+	It("podman run cannot access non default devices", func() {
+		session := podmanTest.Podman([]string{"run", "-v /dev:/dev-host", ALPINE, "head", "-1", "/dev-host/kmsg"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Not(Exit(0)))
+	})
+
 })

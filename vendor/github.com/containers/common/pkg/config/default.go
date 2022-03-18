@@ -3,14 +3,17 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 
+	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/apparmor"
 	"github.com/containers/common/pkg/cgroupv2"
+	"github.com/containers/common/pkg/util"
 	"github.com/containers/storage/pkg/homedir"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/containers/storage/types"
@@ -45,7 +48,7 @@ var (
 	// DefaultInitPath is the default path to the container-init binary
 	DefaultInitPath = "/usr/libexec/podman/catatonit"
 	// DefaultInfraImage to use for infra container
-	DefaultInfraImage = "k8s.gcr.io/pause:3.5"
+	DefaultInfraImage = ""
 	// DefaultRootlessSHMLockPath is the default path for rootless SHM locks
 	DefaultRootlessSHMLockPath = "/libpod_rootless_lock"
 	// DefaultDetachKeys is the default keys sequence for detaching a
@@ -84,7 +87,29 @@ var (
 		"/usr/lib/cni",
 		"/opt/cni/bin",
 	}
+	DefaultSubnetPools = []SubnetPool{
+		// 10.89.0.0/24-10.255.255.0/24
+		parseSubnetPool("10.89.0.0/16", 24),
+		parseSubnetPool("10.90.0.0/15", 24),
+		parseSubnetPool("10.92.0.0/14", 24),
+		parseSubnetPool("10.96.0.0/11", 24),
+		parseSubnetPool("10.128.0.0/9", 24),
+	}
+	// additionalHelperBinariesDir is an extra helper binaries directory that
+	// should be set during link-time, if different packagers put their
+	// helper binary in a different location
+	additionalHelperBinariesDir string
 )
+
+// nolint:unparam
+func parseSubnetPool(subnet string, size int) SubnetPool {
+	_, n, _ := net.ParseCIDR(subnet)
+	return SubnetPool{
+		Base: &nettypes.IPNet{IPNet: *n},
+		Size: size,
+	}
+
+}
 
 const (
 	// _etcDir is the sysconfdir where podman should look for system config files.
@@ -93,10 +118,6 @@ const (
 	// InstallPrefix is the prefix where podman will be installed.
 	// It can be overridden at build time.
 	_installPrefix = "/usr"
-	// _cniConfigDir is the directory where cni configuration is found
-	_cniConfigDir = "/etc/cni/net.d/"
-	// _cniConfigDirRootless is the directory in XDG_CONFIG_HOME for cni plugins
-	_cniConfigDirRootless = "cni/net.d/"
 	// CgroupfsCgroupsManager represents cgroupfs native cgroup manager
 	CgroupfsCgroupsManager = "cgroupfs"
 	// DefaultApparmorProfile  specifies the default apparmor profile for the container.
@@ -114,7 +135,7 @@ const (
 	// DefaultSignaturePolicyPath is the default value for the
 	// policy.json file.
 	DefaultSignaturePolicyPath = "/etc/containers/policy.json"
-	// DefaultSubnet is the subnet that will be used for the default CNI
+	// DefaultSubnet is the subnet that will be used for the default
 	// network.
 	DefaultSubnet = "10.88.0.0/16"
 	// DefaultRootlessSignaturePolicyPath is the location within
@@ -140,8 +161,6 @@ func DefaultConfig() (*Config, error) {
 		return nil, err
 	}
 
-	cniConfig := _cniConfigDir
-
 	defaultEngineConfig.SignaturePolicyPath = DefaultSignaturePolicyPath
 	if unshare.IsRootless() {
 		configHome, err := homedir.GetConfigHome()
@@ -155,7 +174,6 @@ func DefaultConfig() (*Config, error) {
 				defaultEngineConfig.SignaturePolicyPath = DefaultSignaturePolicyPath
 			}
 		}
-		cniConfig = filepath.Join(configHome, _cniConfigDirRootless)
 	}
 
 	cgroupNS := "host"
@@ -183,30 +201,28 @@ func DefaultConfig() (*Config, error) {
 				"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 				"TERM=xterm",
 			},
-			EnvHost:            false,
-			HTTPProxy:          true,
-			Init:               false,
-			InitPath:           "",
-			IPCNS:              "private",
-			LogDriver:          defaultLogDriver(),
-			LogSizeMax:         DefaultLogSizeMax,
-			NetNS:              "private",
-			NoHosts:            false,
-			PidsLimit:          DefaultPidsLimit,
-			PidNS:              "private",
-			RootlessNetworking: getDefaultRootlessNetwork(),
-			ShmSize:            DefaultShmSize,
-			TZ:                 "",
-			Umask:              "0022",
-			UTSNS:              "private",
-			UserNSSize:         DefaultUserNSSize,
+			EnvHost:    false,
+			HTTPProxy:  true,
+			Init:       false,
+			InitPath:   "",
+			IPCNS:      "private",
+			LogDriver:  defaultLogDriver(),
+			LogSizeMax: DefaultLogSizeMax,
+			NetNS:      "private",
+			NoHosts:    false,
+			PidsLimit:  DefaultPidsLimit,
+			PidNS:      "private",
+			ShmSize:    DefaultShmSize,
+			TZ:         "",
+			Umask:      "0022",
+			UTSNS:      "private",
+			UserNSSize: DefaultUserNSSize,
 		},
 		Network: NetworkConfig{
-			NetworkBackend:   "cni",
-			DefaultNetwork:   "podman",
-			DefaultSubnet:    DefaultSubnet,
-			NetworkConfigDir: cniConfig,
-			CNIPluginDirs:    DefaultCNIPluginDirs,
+			DefaultNetwork:     "podman",
+			DefaultSubnet:      DefaultSubnet,
+			DefaultSubnetPools: DefaultSubnetPools,
+			CNIPluginDirs:      DefaultCNIPluginDirs,
 		},
 		Engine:  *defaultEngineConfig,
 		Secrets: defaultSecretConfig(),
@@ -227,8 +243,9 @@ func defaultMachineConfig() MachineConfig {
 	return MachineConfig{
 		CPUs:     1,
 		DiskSize: 100,
-		Image:    "testing",
+		Image:    getDefaultMachineImage(),
 		Memory:   2048,
+		User:     getDefaultMachineUser(),
 	}
 }
 
@@ -264,6 +281,9 @@ func defaultConfigFromMemory() (*EngineConfig, error) {
 	c.VolumePath = filepath.Join(storeOpts.GraphRoot, "volumes")
 
 	c.HelperBinariesDir = defaultHelperBinariesDir
+	if additionalHelperBinariesDir != "" {
+		c.HelperBinariesDir = append(c.HelperBinariesDir, additionalHelperBinariesDir)
+	}
 	c.HooksDir = DefaultHooksDirs
 	c.ImageDefaultTransport = _defaultTransport
 	c.StateType = BoltDBStateStore
@@ -273,6 +293,7 @@ func defaultConfigFromMemory() (*EngineConfig, error) {
 	c.CgroupManager = defaultCgroupManager()
 	c.ServiceTimeout = uint(5)
 	c.StopTimeout = uint(10)
+	c.ExitCommandDelay = uint(5 * 60)
 	c.NetworkCmdOptions = []string{
 		"enable_ipv6=true",
 	}
@@ -370,7 +391,7 @@ func defaultTmpDir() (string, error) {
 		return "/run/libpod", nil
 	}
 
-	runtimeDir, err := getRuntimeDir()
+	runtimeDir, err := util.GetRuntimeDir()
 	if err != nil {
 		return "", err
 	}
@@ -393,15 +414,14 @@ func probeConmon(conmonBinary string) error {
 	cmd := exec.Command(conmonBinary, "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		return err
 	}
 	r := regexp.MustCompile(`^conmon version (?P<Major>\d+).(?P<Minor>\d+).(?P<Patch>\d+)`)
 
 	matches := r.FindStringSubmatch(out.String())
 	if len(matches) != 4 {
-		return errors.Wrap(err, _conmonVersionFormatErr)
+		return errors.New(_conmonVersionFormatErr)
 	}
 	major, err := strconv.Atoi(matches[1])
 	if err != nil {
@@ -572,10 +592,4 @@ func (c *Config) LogDriver() string {
 // MachineEnabled returns if podman is running inside a VM or not
 func (c *Config) MachineEnabled() bool {
 	return c.Engine.MachineEnabled
-}
-
-// RootlessNetworking returns the "kind" of networking
-// rootless containers should use
-func (c *Config) RootlessNetworking() string {
-	return c.Containers.RootlessNetworking
 }

@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/containers/storage/pkg/stringid"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -71,7 +71,7 @@ func (p *Pod) refresh() error {
 		case config.SystemdCgroupsManager:
 			cgroupPath, err := systemdSliceFromPath(p.config.CgroupParent, fmt.Sprintf("libpod_pod_%s", p.ID()))
 			if err != nil {
-				logrus.Errorf("Creating CGroup for pod %s: %v", p.ID(), err)
+				logrus.Errorf("Creating Cgroup for pod %s: %v", p.ID(), err)
 			}
 			p.state.CgroupPath = cgroupPath
 		case config.CgroupfsCgroupsManager:

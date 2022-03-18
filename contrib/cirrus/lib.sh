@@ -138,7 +138,9 @@ passthrough_envars(){
 }
 
 setup_rootless() {
-    req_env_vars ROOTLESS_USER GOPATH GOSRC SECRET_ENV_RE
+    req_env_vars GOPATH GOSRC SECRET_ENV_RE
+
+    ROOTLESS_USER="${ROOTLESS_USER:-some${RANDOM}dude}"
 
     local rootless_uid
     local rootless_gid
@@ -150,9 +152,11 @@ setup_rootless() {
     # shellcheck disable=SC2154
     if passwd --status $ROOTLESS_USER
     then
-        msg "Updating $ROOTLESS_USER user permissions on possibly changed libpod code"
-        chown -R $ROOTLESS_USER:$ROOTLESS_USER "$GOPATH" "$GOSRC"
-        return 0
+        if [[ $PRIV_NAME = "rootless" ]]; then
+            msg "Updating $ROOTLESS_USER user permissions on possibly changed libpod code"
+            chown -R $ROOTLESS_USER:$ROOTLESS_USER "$GOPATH" "$GOSRC"
+            return 0
+        fi
     fi
     msg "************************************************************"
     msg "Setting up rootless user '$ROOTLESS_USER'"
@@ -164,7 +168,12 @@ setup_rootless() {
     msg "creating $rootless_uid:$rootless_gid $ROOTLESS_USER user"
     groupadd -g $rootless_gid $ROOTLESS_USER
     useradd -g $rootless_gid -u $rootless_uid --no-user-group --create-home $ROOTLESS_USER
-    chown -R $ROOTLESS_USER:$ROOTLESS_USER "$GOPATH" "$GOSRC"
+
+    # We also set up rootless user for image-scp tests (running as root)
+    if [[ $PRIV_NAME = "rootless" ]]; then
+        chown -R $ROOTLESS_USER:$ROOTLESS_USER "$GOPATH" "$GOSRC"
+    fi
+    echo "$ROOTLESS_USER ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/ci-rootless
 
     mkdir -p "$HOME/.ssh" "/home/$ROOTLESS_USER/.ssh"
 
@@ -205,16 +214,22 @@ setup_rootless() {
 }
 
 install_test_configs() {
-    echo "Installing cni config, policy and registry config"
-    req_env_vars GOSRC SCRIPT_BASE
-    cd $GOSRC || exit 1
-    install -v -D -m 644 ./cni/87-podman-bridge.conflist /etc/cni/net.d/
-    # This config must always sort last in the list of networks (podman picks first one
-    # as the default).  This config prevents allocation of network address space used
-    # by default in google cloud.  https://cloud.google.com/vpc/docs/vpc#ip-ranges
-    install -v -D -m 644 $SCRIPT_BASE/99-do-not-use-google-subnets.conflist /etc/cni/net.d/
-
+    msg "Installing ./test/registries.conf system-wide."
     install -v -D -m 644 ./test/registries.conf /etc/containers/
+    if [[ "$TEST_ENVIRON" =~ netavark ]]; then
+        # belt-and-suspenders: any pre-existing CNI config. will spoil
+        # default use tof netavark (when both are installed).
+        rm -rf /etc/cni/net.d/*
+    else
+        echo "Installing cni config, policy and registry config"
+        req_env_vars GOSRC SCRIPT_BASE
+        cd $GOSRC || exit 1
+        install -v -D -m 644 ./cni/87-podman-bridge.conflist /etc/cni/net.d/
+        # This config must always sort last in the list of networks (podman picks first one
+        # as the default).  This config prevents allocation of network address space used
+        # by default in google cloud.  https://cloud.google.com/vpc/docs/vpc#ip-ranges
+        install -v -D -m 644 $SCRIPT_BASE/99-do-not-use-google-subnets.conflist /etc/cni/net.d/
+    fi
 }
 
 # Remove all files provided by the distro version of podman.

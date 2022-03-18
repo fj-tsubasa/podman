@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/infra"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/infra"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -21,7 +21,7 @@ import (
 var (
 	systemResetDescription = `Reset podman storage back to default state"
 
-  All containers will be stopped and removed, and all images, volumes and container content will be removed.
+  All containers will be stopped and removed, and all images, volumes, networks and container content will be removed.
 `
 	systemResetCommand = &cobra.Command{
 		Annotations:       map[string]string{registry.EngineMode: registry.ABIMode},
@@ -55,11 +55,11 @@ func reset(cmd *cobra.Command, args []string) {
 	// Prompt for confirmation if --force is not set
 	if !forceFlag {
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Println(`
-WARNING! This will remove:
+		fmt.Println(`WARNING! This will remove:
         - all containers
         - all pods
         - all images
+        - all networks
         - all build cache`)
 		if len(listCtn) > 0 {
 			fmt.Println(`WARNING! The following external containers will be purged:`)

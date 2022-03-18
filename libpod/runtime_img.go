@@ -10,9 +10,9 @@ import (
 	"github.com/containers/buildah/imagebuildah"
 	"github.com/containers/common/libimage"
 	"github.com/containers/image/v5/docker/reference"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/events"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/events"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -25,9 +25,6 @@ import (
 // we can use the libpod-internal removal logic.
 func (r *Runtime) RemoveContainersForImageCallback(ctx context.Context) libimage.RemoveContainerFunc {
 	return func(imageID string) error {
-		r.lock.Lock()
-		defer r.lock.Unlock()
-
 		if !r.valid {
 			return define.ErrRuntimeStopped
 		}
@@ -36,10 +33,21 @@ func (r *Runtime) RemoveContainersForImageCallback(ctx context.Context) libimage
 			return err
 		}
 		for _, ctr := range ctrs {
-			if ctr.config.RootfsImageID == imageID {
-				var timeout *uint
+			if ctr.config.RootfsImageID != imageID {
+				continue
+			}
+			var timeout *uint
+			if ctr.config.IsInfra {
+				pod, err := r.state.Pod(ctr.config.Pod)
+				if err != nil {
+					return errors.Wrapf(err, "container %s is in pod %s, but pod cannot be retrieved", ctr.ID(), pod.ID())
+				}
+				if err := r.removePod(ctx, pod, true, true, timeout); err != nil {
+					return errors.Wrapf(err, "removing image %s: container %s using image could not be removed", imageID, ctr.ID())
+				}
+			} else {
 				if err := r.removeContainer(ctx, ctr, true, false, false, timeout); err != nil {
-					return errors.Wrapf(err, "error removing image %s: container %s using image could not be removed", imageID, ctr.ID())
+					return errors.Wrapf(err, "removing image %s: container %s using image could not be removed", imageID, ctr.ID())
 				}
 			}
 		}
@@ -85,6 +93,8 @@ func (r *Runtime) Build(ctx context.Context, options buildahDefine.BuildOptions,
 	if options.Runtime == "" {
 		options.Runtime = r.GetOCIRuntimePath()
 	}
+	// share the network interface between podman and buildah
+	options.NetworkInterface = r.network
 	id, ref, err := imagebuildah.BuildDockerfiles(ctx, r.store, options, dockerfiles...)
 	// Write event for build completion
 	r.newImageBuildCompleteEvent(id)

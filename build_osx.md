@@ -28,7 +28,7 @@ can now be built.
 ```
 $ cd go/src/github.com/containers/podman
 $ make podman-remote-darwin
-$ mv bin/podman-remote-darwin bin/podman
+$ mv bin/darwin/podman bin/podman
 ```
 
 The binary will be located in bin/
@@ -52,4 +52,4 @@ $ man podman
 ## Using the client
 
 To learn how to use the Podman client, refer its
-[tutorial](https://github.com/containers/podman/blob/master/docs/tutorials/remote_client.md).
+[tutorial](https://github.com/containers/podman/blob/main/docs/tutorials/remote_client.md).

@@ -7,14 +7,14 @@ import (
 	"time"
 
 	tm "github.com/buger/goterm"
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/docker/go-units"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -358,13 +358,12 @@ func (l psReporter) State() string {
 	case "running":
 		t := units.HumanDuration(time.Since(time.Unix(l.StartedAt, 0)))
 		state = "Up " + t + " ago"
-	case "configured":
-		state = "Created"
 	case "exited", "stopped":
 		t := units.HumanDuration(time.Since(time.Unix(l.ExitedAt, 0)))
 		state = fmt.Sprintf("Exited (%d) %s ago", l.ExitCode, t)
 	default:
-		state = l.ListContainer.State
+		// Need to capitalize the first letter to match Docker.
+		state = strings.Title(l.ListContainer.State)
 	}
 	return state
 }

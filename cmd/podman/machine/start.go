@@ -1,13 +1,13 @@
-// +build amd64,!windows arm64,!windows
+//go:build amd64 || arm64
+// +build amd64 arm64
 
 package machine
 
 import (
 	"fmt"
 
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/pkg/machine"
-	"github.com/containers/podman/v3/pkg/machine/qemu"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/pkg/machine"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
@@ -33,19 +33,23 @@ func init() {
 
 func start(cmd *cobra.Command, args []string) error {
 	var (
-		err    error
-		vm     machine.VM
-		vmType string
+		err error
+		vm  machine.VM
 	)
 	vmName := defaultMachineName
 	if len(args) > 0 && len(args[0]) > 0 {
 		vmName = args[0]
 	}
 
-	// We only have qemu VM's for now
-	active, activeName, err := qemu.CheckActiveVM()
+	provider := getSystemDefaultProvider()
+	vm, err = provider.LoadVMByName(vmName)
 	if err != nil {
 		return err
+	}
+
+	active, activeName, cerr := provider.CheckExclusiveActiveVM()
+	if cerr != nil {
+		return cerr
 	}
 	if active {
 		if vmName == activeName {
@@ -53,13 +57,11 @@ func start(cmd *cobra.Command, args []string) error {
 		}
 		return errors.Wrapf(machine.ErrMultipleActiveVM, "cannot start VM %s. VM %s is currently running", vmName, activeName)
 	}
-	switch vmType {
-	default:
-		vm, err = qemu.LoadVMByName(vmName)
-	}
+	vm, err = provider.LoadVMByName(vmName)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("Starting machine %q\n", vmName)
 	if err := vm.Start(vmName, machine.StartOptions{}); err != nil {
 		return err
 	}

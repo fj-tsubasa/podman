@@ -3,10 +3,10 @@ package tunnel
 import (
 	"context"
 
-	"github.com/containers/podman/v3/pkg/bindings/volumes"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/entities/reports"
-	"github.com/containers/podman/v3/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/bindings/volumes"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/entities/reports"
+	"github.com/containers/podman/v4/pkg/errorhandling"
 	"github.com/pkg/errors"
 )
 
@@ -99,4 +99,12 @@ func (ic *ContainerEngine) VolumeExists(ctx context.Context, nameOrID string) (*
 // TODO: Not used and exposed to tunnel. Will be used by `export` command which is unavailable to `podman-remote`
 func (ic *ContainerEngine) VolumeMounted(ctx context.Context, nameOrID string) (*entities.BoolReport, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (ic *ContainerEngine) VolumeMount(ctx context.Context, nameOrIDs []string) ([]*entities.VolumeMountReport, error) {
+	return nil, errors.New("mounting volumes is not supported for remote clients")
+}
+
+func (ic *ContainerEngine) VolumeUnmount(ctx context.Context, nameOrIDs []string) ([]*entities.VolumeUnmountReport, error) {
+	return nil, errors.New("unmounting volumes is not supported for remote clients")
 }

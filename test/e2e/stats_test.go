@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -183,6 +183,19 @@ var _ = Describe("Podman stats", func() {
 		session = podmanTest.Podman([]string{"stats", "--no-stream", "-a"})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
+	})
+
+	It("podman reads slirp4netns network stats", func() {
+		session := podmanTest.Podman([]string{"run", "-d", "--network", "slirp4netns", ALPINE, "top"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		cid := session.OutputToString()
+
+		stats := podmanTest.Podman([]string{"stats", "--format", "'{{.NetIO}}'", "--no-stream", cid})
+		stats.WaitWithDefaultTimeout()
+		Expect(stats).Should(Exit(0))
+		Expect(stats.OutputToString()).To(Not(ContainSubstring("-- / --")))
 	})
 
 	// Regression test for #8265

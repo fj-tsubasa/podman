@@ -12,20 +12,19 @@ import (
 
 	"github.com/containers/buildah"
 	"github.com/containers/common/libimage"
-	"github.com/containers/common/pkg/filters"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/auth"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/infra/abi"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/util"
-	utils2 "github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/auth"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/infra/abi"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/util"
+	utils2 "github.com/containers/podman/v4/utils"
 	"github.com/containers/storage"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
@@ -49,11 +48,11 @@ func ImageExists(w http.ResponseWriter, r *http.Request) {
 	ir := abi.ImageEngine{Libpod: runtime}
 	report, err := ir.Exists(r.Context(), name)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
+		utils.Error(w, http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
 		return
 	}
 	if !report.Value {
-		utils.Error(w, "Something went wrong.", http.StatusNotFound, errors.Errorf("failed to find image %s", name))
+		utils.Error(w, http.StatusNotFound, errors.Errorf("failed to find image %s", name))
 		return
 	}
 	utils.WriteResponse(w, http.StatusNoContent, "")
@@ -69,8 +68,7 @@ func ImageTree(w http.ResponseWriter, r *http.Request) {
 		WhatRequires: false,
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 	ir := abi.ImageEngine{Libpod: runtime}
@@ -78,10 +76,10 @@ func ImageTree(w http.ResponseWriter, r *http.Request) {
 	report, err := ir.Tree(r.Context(), name, options)
 	if err != nil {
 		if errors.Cause(err) == storage.ErrImageUnknown {
-			utils.Error(w, "Something went wrong.", http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
+			utils.Error(w, http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
 			return
 		}
-		utils.Error(w, "Server error", http.StatusInternalServerError, errors.Wrapf(err, "failed to generate image tree for %s", name))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to generate image tree for %s", name))
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, report)
@@ -91,58 +89,16 @@ func GetImage(w http.ResponseWriter, r *http.Request) {
 	name := utils.GetName(r)
 	newImage, err := utils.GetImage(r, name)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
+		utils.Error(w, http.StatusNotFound, errors.Wrapf(err, "failed to find image %s", name))
 		return
 	}
 	options := &libimage.InspectOptions{WithParent: true, WithSize: true}
 	inspect, err := newImage.Inspect(r.Context(), options)
 	if err != nil {
-		utils.Error(w, "Server error", http.StatusInternalServerError, errors.Wrapf(err, "failed in inspect image %s", inspect.ID))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed in inspect image %s", inspect.ID))
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, inspect)
-}
-
-func GetImages(w http.ResponseWriter, r *http.Request) {
-	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
-	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
-	query := struct {
-		All     bool
-		Digests bool
-		Filter  string // Docker 1.24 compatibility
-	}{
-		// This is where you can override the golang default value for one of fields
-	}
-
-	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
-		return
-	}
-	if _, found := r.URL.Query()["digests"]; found && query.Digests {
-		utils.UnSupportedParameter("digests")
-		return
-	}
-
-	filterList, err := filters.FiltersFromRequest(r)
-	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
-		return
-	}
-	if !utils.IsLibpodRequest(r) && len(query.Filter) > 0 { // Docker 1.24 compatibility
-		filterList = append(filterList, "reference="+query.Filter)
-	}
-
-	imageEngine := abi.ImageEngine{Libpod: runtime}
-
-	listOptions := entities.ImageListOptions{All: query.All, Filter: filterList}
-	summaries, err := imageEngine.List(r.Context(), listOptions)
-	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
-		return
-	}
-
-	utils.WriteResponse(w, http.StatusOK, summaries)
 }
 
 func PruneImages(w http.ResponseWriter, r *http.Request) {
@@ -160,14 +116,14 @@ func PruneImages(w http.ResponseWriter, r *http.Request) {
 
 	filterMap, err := util.PrepareFilters(r)
 	if err != nil {
-		utils.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError,
+		utils.Error(w, http.StatusInternalServerError,
 			errors.
 				Wrapf(err, "failed to decode filter parameters for %s", r.URL.String()))
 		return
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError,
+		utils.Error(w, http.StatusInternalServerError,
 			errors.
 				Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
@@ -199,7 +155,7 @@ func PruneImages(w http.ResponseWriter, r *http.Request) {
 	}
 	imagePruneReports, err := imageEngine.Prune(r.Context(), pruneOptions)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
+		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, imagePruneReports)
@@ -219,7 +175,7 @@ func ExportImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
+		utils.Error(w, http.StatusBadRequest,
 			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
@@ -234,23 +190,23 @@ func ExportImage(w http.ResponseWriter, r *http.Request) {
 	case define.OCIArchive, define.V2s2Archive:
 		tmpfile, err := ioutil.TempFile("", "api.tar")
 		if err != nil {
-			utils.Error(w, "unable to create tmpfile", http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
 			return
 		}
 		output = tmpfile.Name()
 		if err := tmpfile.Close(); err != nil {
-			utils.Error(w, "unable to close tmpfile", http.StatusInternalServerError, errors.Wrap(err, "unable to close tempfile"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to close tempfile"))
 			return
 		}
 	case define.OCIManifestDir, define.V2s2ManifestDir:
 		tmpdir, err := ioutil.TempDir("", "save")
 		if err != nil {
-			utils.Error(w, "unable to create tmpdir", http.StatusInternalServerError, errors.Wrap(err, "unable to create tempdir"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tempdir"))
 			return
 		}
 		output = tmpdir
 	default:
-		utils.Error(w, "unknown format", http.StatusInternalServerError, errors.Errorf("unknown format %q", query.Format))
+		utils.Error(w, http.StatusInternalServerError, errors.Errorf("unknown format %q", query.Format))
 		return
 	}
 
@@ -262,7 +218,7 @@ func ExportImage(w http.ResponseWriter, r *http.Request) {
 		Output:   output,
 	}
 	if err := imageEngine.Save(r.Context(), name, nil, saveOptions); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 	defer os.RemoveAll(output)
@@ -279,7 +235,7 @@ func ExportImage(w http.ResponseWriter, r *http.Request) {
 	}
 	rdr, err := os.Open(output)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "failed to read the exported tarfile"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "failed to read the exported tarfile"))
 		return
 	}
 	defer rdr.Close()
@@ -302,22 +258,20 @@ func ExportImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
 	// References are mandatory!
 	if len(query.References) == 0 {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.New("No references"))
+		utils.Error(w, http.StatusBadRequest, errors.New("No references"))
 		return
 	}
 
 	// Format is mandatory! Currently, we only support multi-image docker
 	// archives.
 	if len(query.References) > 1 && query.Format != define.V2s2Archive {
-		utils.Error(w, "unsupported format", http.StatusInternalServerError, errors.Errorf("multi-image archives must use format of %s", define.V2s2Archive))
+		utils.Error(w, http.StatusInternalServerError, errors.Errorf("multi-image archives must use format of %s", define.V2s2Archive))
 		return
 	}
 
@@ -335,23 +289,23 @@ func ExportImages(w http.ResponseWriter, r *http.Request) {
 	case define.V2s2Archive, define.OCIArchive:
 		tmpfile, err := ioutil.TempFile("", "api.tar")
 		if err != nil {
-			utils.Error(w, "unable to create tmpfile", http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
 			return
 		}
 		output = tmpfile.Name()
 		if err := tmpfile.Close(); err != nil {
-			utils.Error(w, "unable to close tmpfile", http.StatusInternalServerError, errors.Wrap(err, "unable to close tempfile"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to close tempfile"))
 			return
 		}
 	case define.OCIManifestDir, define.V2s2ManifestDir:
 		tmpdir, err := ioutil.TempDir("", "save")
 		if err != nil {
-			utils.Error(w, "unable to create tmpdir", http.StatusInternalServerError, errors.Wrap(err, "unable to create tmpdir"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tmpdir"))
 			return
 		}
 		output = tmpdir
 	default:
-		utils.Error(w, "unsupported format", http.StatusInternalServerError, errors.Errorf("unsupported format %q", query.Format))
+		utils.Error(w, http.StatusInternalServerError, errors.Errorf("unsupported format %q", query.Format))
 		return
 	}
 	defer os.RemoveAll(output)
@@ -367,13 +321,13 @@ func ExportImages(w http.ResponseWriter, r *http.Request) {
 
 	imageEngine := abi.ImageEngine{Libpod: runtime}
 	if err := imageEngine.Save(r.Context(), query.References[0], query.References[1:], opts); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 
 	rdr, err := os.Open(output)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "failed to read the exported tarfile"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "failed to read the exported tarfile"))
 		return
 	}
 	defer rdr.Close()
@@ -385,7 +339,7 @@ func ImagesLoad(w http.ResponseWriter, r *http.Request) {
 
 	tmpfile, err := ioutil.TempFile("", "libpod-images-load.tar")
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
 		return
 	}
 	defer os.Remove(tmpfile.Name())
@@ -394,7 +348,7 @@ func ImagesLoad(w http.ResponseWriter, r *http.Request) {
 	tmpfile.Close()
 
 	if err != nil && err != io.EOF {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to write archive to temporary file"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to write archive to temporary file"))
 		return
 	}
 
@@ -403,7 +357,7 @@ func ImagesLoad(w http.ResponseWriter, r *http.Request) {
 	loadOptions := entities.ImageLoadOptions{Input: tmpfile.Name()}
 	loadReport, err := imageEngine.Load(r.Context(), loadOptions)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to load image"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to load image"))
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, loadReport)
@@ -422,8 +376,7 @@ func ImagesImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -432,14 +385,14 @@ func ImagesImport(w http.ResponseWriter, r *http.Request) {
 	if len(query.URL) == 0 {
 		tmpfile, err := ioutil.TempFile("", "libpod-images-import.tar")
 		if err != nil {
-			utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to create tempfile"))
 			return
 		}
 		defer os.Remove(tmpfile.Name())
 		defer tmpfile.Close()
 
 		if _, err := io.Copy(tmpfile, r.Body); err != nil && err != io.EOF {
-			utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to write archive to temporary file"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to write archive to temporary file"))
 			return
 		}
 
@@ -456,7 +409,7 @@ func ImagesImport(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := imageEngine.Import(r.Context(), importOptions)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "unable to import tarball"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "unable to import tarball"))
 		return
 	}
 
@@ -477,13 +430,13 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 		// This is where you can override the golang default value for one of fields
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
 	source := strings.TrimSuffix(utils.GetName(r), "/push") // GetName returns the entire path
 	if _, err := utils.ParseStorageReference(source); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -493,13 +446,13 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := utils.IsRegistryReference(destination); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 
-	authconf, authfile, key, err := auth.GetCredentials(r)
+	authconf, authfile, err := auth.GetCredentials(r)
 	if err != nil {
-		utils.Error(w, "failed to retrieve repository credentials", http.StatusBadRequest, errors.Wrapf(err, "failed to parse %q header for %s", key, r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 	defer auth.RemoveAuthfile(authfile)
@@ -522,7 +475,7 @@ func PushImage(w http.ResponseWriter, r *http.Request) {
 
 	imageEngine := abi.ImageEngine{Libpod: runtime}
 	if err := imageEngine.Push(context.Background(), source, destination, options); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "error pushing image %q", destination))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "error pushing image %q", destination))
 		return
 	}
 
@@ -544,6 +497,7 @@ func CommitContainer(w http.ResponseWriter, r *http.Request) {
 		Container string   `schema:"container"`
 		Format    string   `schema:"format"`
 		Pause     bool     `schema:"pause"`
+		Squash    bool     `schema:"squash"`
 		Repo      string   `schema:"repo"`
 		Tag       string   `schema:"tag"`
 	}{
@@ -551,12 +505,12 @@ func CommitContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 	rtc, err := runtime.GetConfig()
 	if err != nil {
-		utils.Error(w, "failed to get runtime config", http.StatusInternalServerError, errors.Wrap(err, "failed to get runtime config"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "failed to get runtime config"))
 		return
 	}
 	sc := runtime.SystemContext()
@@ -590,10 +544,11 @@ func CommitContainer(w http.ResponseWriter, r *http.Request) {
 	options.Message = query.Comment
 	options.Author = query.Author
 	options.Pause = query.Pause
+	options.Squash = query.Squash
 	options.Changes = query.Changes
 	ctr, err := runtime.LookupContainer(query.Container)
 	if err != nil {
-		utils.Error(w, "failed to lookup container", http.StatusNotFound, err)
+		utils.Error(w, http.StatusNotFound, err)
 		return
 	}
 
@@ -602,7 +557,7 @@ func CommitContainer(w http.ResponseWriter, r *http.Request) {
 	}
 	commitImage, err := ctr.Commit(r.Context(), destImage, options)
 	if err != nil && !strings.Contains(err.Error(), "is not running") {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "CommitFailure"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "CommitFailure"))
 		return
 	}
 	utils.WriteResponse(w, http.StatusOK, handlers.IDResponse{ID: commitImage.ID()}) // nolint
@@ -619,7 +574,7 @@ func UntagImage(w http.ResponseWriter, r *http.Request) {
 	switch {
 	// If tag is set, repo must be as well.
 	case len(repo) == 0 && len(tag) > 0:
-		utils.Error(w, "repo tag is required", http.StatusBadRequest, errors.New("repo parameter is required to tag an image"))
+		utils.Error(w, http.StatusBadRequest, errors.New("repo parameter is required to tag an image"))
 		return
 
 	case len(repo) == 0:
@@ -644,7 +599,7 @@ func UntagImage(w http.ResponseWriter, r *http.Request) {
 		if errors.Cause(err) == storage.ErrImageUnknown {
 			utils.ImageNotFound(w, name, errors.Wrapf(err, "failed to find image %s", name))
 		} else {
-			utils.Error(w, "failed to untag", http.StatusInternalServerError, err)
+			utils.Error(w, http.StatusInternalServerError, err)
 		}
 		return
 	}
@@ -662,8 +617,7 @@ func ImagesBatchRemove(w http.ResponseWriter, r *http.Request) {
 	}{}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -686,8 +640,7 @@ func ImagesRemove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -705,12 +658,12 @@ func ImagesRemove(w http.ResponseWriter, r *http.Request) {
 		utils.WriteResponse(w, http.StatusOK, report)
 	case 1:
 		// 404 - no such image
-		utils.Error(w, "error removing image", http.StatusNotFound, errorhandling.JoinErrors(rmErrors))
+		utils.Error(w, http.StatusNotFound, errorhandling.JoinErrors(rmErrors))
 	case 2:
 		// 409 - conflict error (in use by containers)
-		utils.Error(w, "error removing image", http.StatusConflict, errorhandling.JoinErrors(rmErrors))
+		utils.Error(w, http.StatusConflict, errorhandling.JoinErrors(rmErrors))
 	default:
 		// 500 - internal error
-		utils.Error(w, "failed to remove image", http.StatusInternalServerError, errorhandling.JoinErrors(rmErrors))
+		utils.Error(w, http.StatusInternalServerError, errorhandling.JoinErrors(rmErrors))
 	}
 }

@@ -5,23 +5,23 @@ import (
 	"os"
 	"strings"
 
-	_ "github.com/containers/podman/v3/cmd/podman/completion"
-	_ "github.com/containers/podman/v3/cmd/podman/containers"
-	_ "github.com/containers/podman/v3/cmd/podman/generate"
-	_ "github.com/containers/podman/v3/cmd/podman/healthcheck"
-	_ "github.com/containers/podman/v3/cmd/podman/images"
-	_ "github.com/containers/podman/v3/cmd/podman/machine"
-	_ "github.com/containers/podman/v3/cmd/podman/manifest"
-	_ "github.com/containers/podman/v3/cmd/podman/networks"
-	_ "github.com/containers/podman/v3/cmd/podman/play"
-	_ "github.com/containers/podman/v3/cmd/podman/pods"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	_ "github.com/containers/podman/v3/cmd/podman/secrets"
-	_ "github.com/containers/podman/v3/cmd/podman/system"
-	_ "github.com/containers/podman/v3/cmd/podman/system/connection"
-	_ "github.com/containers/podman/v3/cmd/podman/volumes"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/terminal"
+	_ "github.com/containers/podman/v4/cmd/podman/completion"
+	_ "github.com/containers/podman/v4/cmd/podman/containers"
+	_ "github.com/containers/podman/v4/cmd/podman/generate"
+	_ "github.com/containers/podman/v4/cmd/podman/healthcheck"
+	_ "github.com/containers/podman/v4/cmd/podman/images"
+	_ "github.com/containers/podman/v4/cmd/podman/machine"
+	_ "github.com/containers/podman/v4/cmd/podman/manifest"
+	_ "github.com/containers/podman/v4/cmd/podman/networks"
+	_ "github.com/containers/podman/v4/cmd/podman/play"
+	_ "github.com/containers/podman/v4/cmd/podman/pods"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	_ "github.com/containers/podman/v4/cmd/podman/secrets"
+	_ "github.com/containers/podman/v4/cmd/podman/system"
+	_ "github.com/containers/podman/v4/cmd/podman/system/connection"
+	_ "github.com/containers/podman/v4/cmd/podman/volumes"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/terminal"
 	"github.com/containers/storage/pkg/reexec"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -52,14 +52,14 @@ func parseCommands() *cobra.Command {
 		// Command cannot be run rootless
 		_, found := c.Command.Annotations[registry.UnshareNSRequired]
 		if found {
-			if rootless.IsRootless() && os.Getuid() != 0 {
+			if rootless.IsRootless() && os.Getuid() != 0 && c.Command.Name() != "scp" {
 				c.Command.RunE = func(cmd *cobra.Command, args []string) error {
 					return fmt.Errorf("cannot run command %q in rootless mode, must execute `podman unshare` first", cmd.CommandPath())
 				}
 			}
 		} else {
 			_, found = c.Command.Annotations[registry.ParentNSRequired]
-			if rootless.IsRootless() && found {
+			if rootless.IsRootless() && found && c.Command.Name() != "scp" {
 				c.Command.RunE = func(cmd *cobra.Command, args []string) error {
 					return fmt.Errorf("cannot run command %q in rootless mode", cmd.CommandPath())
 				}
@@ -71,6 +71,8 @@ func parseCommands() *cobra.Command {
 			parent = c.Parent
 		}
 		parent.AddCommand(c.Command)
+
+		c.Command.SetFlagErrorFunc(flagErrorFuncfunc)
 
 		// - templates need to be set here, as PersistentPreRunE() is
 		// not called when --help is used.
@@ -84,5 +86,11 @@ func parseCommands() *cobra.Command {
 		os.Exit(1)
 	}
 
+	rootCmd.SetFlagErrorFunc(flagErrorFuncfunc)
 	return rootCmd
+}
+
+func flagErrorFuncfunc(c *cobra.Command, e error) error {
+	e = fmt.Errorf("%w\nSee '%s --help'", e, c.CommandPath())
+	return e
 }

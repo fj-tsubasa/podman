@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/checkpoint-restore/go-criu/v5/stats"
-	"github.com/containers/podman/v3/pkg/checkpoint/crutils"
-	"github.com/containers/podman/v3/pkg/criu"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	. "github.com/containers/podman/v3/test/utils"
-	"github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/pkg/checkpoint/crutils"
+	"github.com/containers/podman/v4/pkg/criu"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	. "github.com/containers/podman/v4/test/utils"
+	"github.com/containers/podman/v4/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -91,25 +91,97 @@ var _ = Describe("Podman checkpoint", func() {
 		Expect(session).Should(Exit(0))
 		cid := session.OutputToString()
 
-		result := podmanTest.Podman([]string{"container", "checkpoint", cid})
+		// Check if none of the checkpoint/restore specific information is displayed
+		// for newly started containers.
+		inspect := podmanTest.Podman([]string{"inspect", cid})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		inspectOut := inspect.InspectContainerToJSON()
+		Expect(inspectOut[0].State.Checkpointed).To(BeFalse(), ".State.Checkpointed")
+		Expect(inspectOut[0].State.Restored).To(BeFalse(), ".State.Restored")
+		Expect(inspectOut[0].State.CheckpointPath).To(Equal(""))
+		Expect(inspectOut[0].State.CheckpointLog).To(Equal(""))
+		Expect(inspectOut[0].State.RestoreLog).To(Equal(""))
+
+		result := podmanTest.Podman([]string{
+			"container",
+			"checkpoint",
+			"--keep",
+			cid,
+		})
 		result.WaitWithDefaultTimeout()
 
 		Expect(result).Should(Exit(0))
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 		Expect(podmanTest.GetContainerStatus()).To(ContainSubstring("Exited"))
 
-		inspect := podmanTest.Podman([]string{"inspect", cid})
+		// For a checkpointed container we expect the checkpoint related information
+		// to be populated.
+		inspect = podmanTest.Podman([]string{"inspect", cid})
 		inspect.WaitWithDefaultTimeout()
 		Expect(inspect).Should(Exit(0))
-		inspectOut := inspect.InspectContainerToJSON()
+		inspectOut = inspect.InspectContainerToJSON()
 		Expect(inspectOut[0].State.Checkpointed).To(BeTrue(), ".State.Checkpointed")
+		Expect(inspectOut[0].State.Restored).To(BeFalse(), ".State.Restored")
+		Expect(inspectOut[0].State.CheckpointPath).To(ContainSubstring("userdata/checkpoint"))
+		Expect(inspectOut[0].State.CheckpointLog).To(ContainSubstring("userdata/dump.log"))
+		Expect(inspectOut[0].State.RestoreLog).To(Equal(""))
 
-		result = podmanTest.Podman([]string{"container", "restore", cid})
+		result = podmanTest.Podman([]string{
+			"container",
+			"restore",
+			"--keep",
+			cid,
+		})
 		result.WaitWithDefaultTimeout()
 
 		Expect(result).Should(Exit(0))
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
 		Expect(podmanTest.GetContainerStatus()).To(ContainSubstring("Up"))
+
+		inspect = podmanTest.Podman([]string{"inspect", cid})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		inspectOut = inspect.InspectContainerToJSON()
+		Expect(inspectOut[0].State.Restored).To(BeTrue(), ".State.Restored")
+		Expect(inspectOut[0].State.Checkpointed).To(BeFalse(), ".State.Checkpointed")
+		Expect(inspectOut[0].State.CheckpointPath).To(ContainSubstring("userdata/checkpoint"))
+		Expect(inspectOut[0].State.CheckpointLog).To(ContainSubstring("userdata/dump.log"))
+		Expect(inspectOut[0].State.RestoreLog).To(ContainSubstring("userdata/restore.log"))
+
+		result = podmanTest.Podman([]string{
+			"container",
+			"stop",
+			"--timeout",
+			"0",
+			cid,
+		})
+		result.WaitWithDefaultTimeout()
+
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+
+		result = podmanTest.Podman([]string{
+			"container",
+			"start",
+			cid,
+		})
+		result.WaitWithDefaultTimeout()
+
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+
+		// Stopping and starting the container should remove all checkpoint
+		// related information from inspect again.
+		inspect = podmanTest.Podman([]string{"inspect", cid})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect).Should(Exit(0))
+		inspectOut = inspect.InspectContainerToJSON()
+		Expect(inspectOut[0].State.Checkpointed).To(BeFalse(), ".State.Checkpointed")
+		Expect(inspectOut[0].State.Restored).To(BeFalse(), ".State.Restored")
+		Expect(inspectOut[0].State.CheckpointPath).To(Equal(""))
+		Expect(inspectOut[0].State.CheckpointLog).To(Equal(""))
+		Expect(inspectOut[0].State.RestoreLog).To(Equal(""))
 	})
 
 	It("podman checkpoint a running container by name", func() {
@@ -867,6 +939,9 @@ var _ = Describe("Podman checkpoint", func() {
 	})
 
 	It("podman checkpoint container with --pre-checkpoint", func() {
+		if !criu.MemTrack() {
+			Skip("system (architecture/kernel/CRIU) does not support memory tracking")
+		}
 		if !strings.Contains(podmanTest.OCIRuntime, "runc") {
 			Skip("Test only works on runc 1.0-rc3 or higher.")
 		}
@@ -900,6 +975,9 @@ var _ = Describe("Podman checkpoint", func() {
 
 	It("podman checkpoint container with --pre-checkpoint and export (migration)", func() {
 		SkipIfRemote("--import-previous is not yet supported on the remote client")
+		if !criu.MemTrack() {
+			Skip("system (architecture/kernel/CRIU) does not support memory tracking")
+		}
 		if !strings.Contains(podmanTest.OCIRuntime, "runc") {
 			Skip("Test only works on runc 1.0-rc3 or higher.")
 		}
@@ -1003,10 +1081,6 @@ var _ = Describe("Podman checkpoint", func() {
 	})
 
 	namespaceCombination := []string{
-		"cgroup,ipc,net,uts,pid",
-		"cgroup,ipc,net,uts",
-		"cgroup,ipc,net",
-		"cgroup,ipc",
 		"ipc,net,uts,pid",
 		"ipc,net,uts",
 		"ipc,net",
@@ -1552,5 +1626,92 @@ var _ = Describe("Podman checkpoint", func() {
 		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 		// Remove exported checkpoint
 		os.Remove(fileName)
+	})
+
+	It("podman checkpoint and restore dev/shm content with --export and --import", func() {
+		localRunString := getRunString([]string{"--rm", ALPINE, "top"})
+		session := podmanTest.Podman(localRunString)
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+		cid := session.OutputToString()
+
+		// Add test file in dev/shm
+		result := podmanTest.Podman([]string{"exec", cid, "/bin/sh", "-c", "echo test" + cid + "test > /dev/shm/test.output"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+
+		session = podmanTest.Podman([]string{"inspect", "--format", "{{.OCIRuntime}}", cid})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		runtime := session.OutputToString()
+
+		checkpointFileName := "/tmp/checkpoint-" + cid + ".tar.gz"
+		result = podmanTest.Podman([]string{"container", "checkpoint", cid, "-e", checkpointFileName})
+		result.WaitWithDefaultTimeout()
+
+		// As the container has been started with '--rm' it will be completely
+		// cleaned up after checkpointing.
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+		Expect(podmanTest.NumberOfContainers()).To(Equal(0))
+
+		result = podmanTest.Podman([]string{"container", "restore", "-i", checkpointFileName})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+		Expect(podmanTest.GetContainerStatus()).To(ContainSubstring("Up"))
+
+		// The restored container should have the same runtime as the original container
+		result = podmanTest.Podman([]string{"inspect", "--format", "{{.OCIRuntime}}", cid})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(session.OutputToString()).To(Equal(runtime))
+
+		// Verify the test file content in dev/shm
+		result = podmanTest.Podman([]string{"exec", cid, "cat", "/dev/shm/test.output"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(result.OutputToString()).To(ContainSubstring("test" + cid + "test"))
+
+		// Remove exported checkpoint
+		os.Remove(checkpointFileName)
+	})
+
+	It("podman checkpoint and restore dev/shm content", func() {
+		localRunString := getRunString([]string{ALPINE, "top"})
+		session := podmanTest.Podman(localRunString)
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+		cid := session.OutputToString()
+
+		// Add test file in dev/shm
+		result := podmanTest.Podman([]string{"exec", cid, "/bin/sh", "-c", "echo test" + cid + "test > /dev/shm/test.output"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+
+		result = podmanTest.Podman([]string{"container", "checkpoint", cid})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
+		Expect(podmanTest.GetContainerStatus()).To(ContainSubstring("Exited"))
+
+		result = podmanTest.Podman([]string{"container", "restore", cid})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(1))
+		Expect(podmanTest.GetContainerStatus()).To(ContainSubstring("Up"))
+
+		// Verify the test file content in dev/shm
+		result = podmanTest.Podman([]string{"exec", cid, "cat", "/dev/shm/test.output"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(result.OutputToString()).To(ContainSubstring("test" + cid + "test"))
+
+		result = podmanTest.Podman([]string{"rm", "-t", "0", "-fa"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+		Expect(podmanTest.NumberOfContainersRunning()).To(Equal(0))
 	})
 })

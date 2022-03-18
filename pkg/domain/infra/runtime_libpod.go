@@ -10,11 +10,11 @@ import (
 	"sync"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/namespaces"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/namespaces"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/types"
 	"github.com/pkg/errors"
@@ -223,7 +223,7 @@ func getRuntime(ctx context.Context, fs *flag.FlagSet, opts *engineOpts) (*libpo
 	// TODO flag to set libpod static dir?
 	// TODO flag to set libpod tmp dir?
 
-	if fs.Changed("cni-config-dir") {
+	if fs.Changed("network-config-dir") {
 		options = append(options, libpod.WithCNIConfigDir(cfg.Network.NetworkConfigDir))
 	}
 	if fs.Changed("default-mounts-file") {

@@ -7,10 +7,10 @@ import (
 	"github.com/containers/common/pkg/apparmor"
 	"github.com/containers/common/pkg/capabilities"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/specgen"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/specgen"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
@@ -246,7 +246,7 @@ func securityConfigureGenerator(s *specgen.SpecGenerator, g *generate.Generator,
 
 		// Ignore net sysctls if --net=host
 		if s.NetNS.IsHost() && strings.HasPrefix(sysctlKey, "net.") {
-			return errors.Wrapf(define.ErrInvalidArg, "sysctl %s=%s can't be set since Host Namespace set to host", sysctlKey, sysctlVal)
+			return errors.Wrapf(define.ErrInvalidArg, "sysctl %s=%s can't be set since Network Namespace set to host", sysctlKey, sysctlVal)
 		}
 
 		// Ignore uts sysctls if --uts=host

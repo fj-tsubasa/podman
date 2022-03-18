@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/containers/common/libimage"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/common/libnetwork/types"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/containers/storage"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -67,6 +68,22 @@ func (r *Runtime) Reset(ctx context.Context) error {
 				continue
 			}
 			logrus.Errorf("Removing volume %s: %v", v.config.Name, err)
+		}
+	}
+
+	// remove all networks
+	nets, err := r.network.NetworkList()
+	if err != nil {
+		return err
+	}
+	for _, net := range nets {
+		// do not delete the default network
+		if net.Name == r.network.DefaultNetworkName() {
+			continue
+		}
+		// ignore not exists errors because of the TOCTOU problem
+		if err := r.network.NetworkRemove(net.Name); err != nil && !errors.Is(err, types.ErrNoSuchNetwork) {
+			logrus.Errorf("Removing network %s: %v", net.Name, err)
 		}
 	}
 

@@ -3,7 +3,7 @@ package specgen
 import (
 	"net"
 
-	"github.com/containers/podman/v3/libpod/network/types"
+	"github.com/containers/common/libnetwork/types"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -63,6 +63,8 @@ type PodBasicConfig struct {
 	// also be used by some tools that wish to recreate the pod
 	// (e.g. `podman generate systemd --new`).
 	// Optional.
+	// ShareParent determines if all containers in the pod will share the pod's cgroup as the cgroup parent
+	ShareParent      *bool    `json:"share_parent,omitempty"`
 	PodCreateCommand []string `json:"pod_create_command,omitempty"`
 	// Pid sets the process id namespace of the pod
 	// Optional (defaults to private if unset). This sets the PID namespace of the infra container
@@ -74,6 +76,8 @@ type PodBasicConfig struct {
 	Userns Namespace `json:"userns,omitempty"`
 	// Devices contains user specified Devices to be added to the Pod
 	Devices []string `json:"pod_devices,omitempty"`
+	// Sysctl sets kernel parameters for the pod
+	Sysctl map[string]string `json:"sysctl,omitempty"`
 }
 
 // PodNetworkConfig contains networking configuration for a pod.
@@ -86,33 +90,26 @@ type PodNetworkConfig struct {
 	// Defaults to Bridge as root and Slirp as rootless.
 	// Mandatory.
 	NetNS Namespace `json:"netns,omitempty"`
-	// StaticIP sets a static IP for the infra container. As the infra
-	// container's network is used for the entire pod by default, this will
-	// thus be a static IP for the whole pod.
-	// Only available if NetNS is set to Bridge (the default for root).
-	// As such, conflicts with NoInfra=true by proxy.
-	// Optional.
-	StaticIP *net.IP `json:"static_ip,omitempty"`
-	// StaticMAC sets a static MAC for the infra container. As the infra
-	// container's network is used for the entire pod by default, this will
-	// thus be a static MAC for the entire pod.
-	// Only available if NetNS is set to Bridge (the default for root).
-	// As such, conflicts with NoInfra=true by proxy.
-	// Optional.
-	// swagger:strfmt string
-	StaticMAC *types.HardwareAddr `json:"static_mac,omitempty"`
 	// PortMappings is a set of ports to map into the infra container.
 	// As, by default, containers share their network with the infra
 	// container, this will forward the ports to the entire pod.
 	// Only available if NetNS is set to Bridge or Slirp.
 	// Optional.
 	PortMappings []types.PortMapping `json:"portmappings,omitempty"`
-	// CNINetworks is a list of CNI networks that the infra container will
-	// join. As, by default, containers share their network with the infra
-	// container, these networks will effectively be joined by the
-	// entire pod.
-	// Only available when NetNS is set to Bridge, the default for root.
+	// Map of networks names to ids the container should join to.
+	// You can request additional settings for each network, you can
+	// set network aliases, static ips, static mac address  and the
+	// network interface name for this container on the specific network.
+	// If the map is empty and the bridge network mode is set the container
+	// will be joined to the default network.
+	Networks map[string]types.PerNetworkOptions
+	// CNINetworks is a list of CNI networks to join the container to.
+	// If this list is empty, the default CNI network will be joined
+	// instead. If at least one entry is present, we will not join the
+	// default network (unless it is part of this list).
+	// Only available if NetNS is set to bridge.
 	// Optional.
+	// Deprecated: as of podman 4.0 use "Networks" instead.
 	CNINetworks []string `json:"cni_networks,omitempty"`
 	// NoManageResolvConf indicates that /etc/resolv.conf should not be
 	// managed by the pod. Instead, each container will create and manage a
@@ -188,7 +185,7 @@ type PodStorageConfig struct {
 // PodCgroupConfig contains configuration options about a pod's cgroups.
 // This will be expanded in future updates to pods.
 type PodCgroupConfig struct {
-	// CgroupParent is the parent for the CGroup that the pod will create.
+	// CgroupParent is the parent for the Cgroup that the pod will create.
 	// This pod cgroup will, in turn, be the default cgroup parent for all
 	// containers in the pod.
 	// Optional.
@@ -203,6 +200,7 @@ type PodSpecGenerator struct {
 	PodCgroupConfig
 	PodResourceConfig
 	PodStorageConfig
+	PodSecurityConfig
 	InfraContainerSpec *SpecGenerator `json:"-"`
 }
 
@@ -215,6 +213,10 @@ type PodResourceConfig struct {
 	CPUQuota int64 `json:"cpu_quota,omitempty"`
 	// ThrottleReadBpsDevice contains the rate at which the devices in the pod can be read from/accessed
 	ThrottleReadBpsDevice map[string]spec.LinuxThrottleDevice `json:"throttleReadBpsDevice,omitempty"`
+}
+
+type PodSecurityConfig struct {
+	SecurityOpt []string `json:"security_opt,omitempty"`
 }
 
 // NewPodSpecGenerator creates a new pod spec

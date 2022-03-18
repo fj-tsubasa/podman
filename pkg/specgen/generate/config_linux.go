@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/rootless"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/pkg/errors"
@@ -45,17 +45,6 @@ func addPrivilegedDevices(g *generate.Generator) error {
 				continue
 			}
 			if _, found := mounts[d.Path]; found {
-				continue
-			}
-			st, err := os.Stat(d.Path)
-			if err != nil {
-				if err == unix.EPERM {
-					continue
-				}
-				return err
-			}
-			// Skip devices that the user has not access to.
-			if st.Mode()&0007 == 0 {
 				continue
 			}
 			newMounts = append(newMounts, devMnt)

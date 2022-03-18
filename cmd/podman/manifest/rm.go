@@ -4,21 +4,21 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/pkg/errorhandling"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/pkg/errorhandling"
 	"github.com/spf13/cobra"
 )
 
 var (
 	rmCmd = &cobra.Command{
-		Use:               "rm LIST",
+		Use:               "rm LIST [LIST...]",
 		Short:             "Remove manifest list or image index from local storage",
 		Long:              "Remove manifest list or image index from local storage.",
 		RunE:              rm,
+		Args:              cobra.MinimumNArgs(1),
 		ValidArgsFunction: common.AutocompleteImages,
 		Example:           `podman manifest rm mylist:v1.11`,
-		Args:              cobra.ExactArgs(1),
 	}
 )
 

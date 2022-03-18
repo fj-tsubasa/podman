@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +17,10 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/inspect"
-	"github.com/containers/podman/v3/pkg/rootless"
-	. "github.com/containers/podman/v3/test/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/inspect"
+	"github.com/containers/podman/v4/pkg/rootless"
+	. "github.com/containers/podman/v4/test/utils"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/reexec"
 	"github.com/containers/storage/pkg/stringid"
@@ -46,7 +47,7 @@ type PodmanTestIntegration struct {
 	PodmanTest
 	ConmonBinary        string
 	Root                string
-	CNIConfigDir        string
+	NetworkConfigDir    string
 	OCIRuntime          string
 	RunRoot             string
 	StorageOptions      string
@@ -199,6 +200,7 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 	host := GetHostDistributionInfo()
 	cwd, _ := os.Getwd()
 
+	root := filepath.Join(tempDir, "root")
 	podmanBinary := filepath.Join(cwd, "../../bin/podman")
 	if os.Getenv("PODMAN_BINARY") != "" {
 		podmanBinary = os.Getenv("PODMAN_BINARY")
@@ -235,11 +237,26 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 		ociRuntime = "crun"
 	}
 	os.Setenv("DISABLE_HC_SYSTEMD", "true")
-	CNIConfigDir := "/etc/cni/net.d"
+
+	networkBackend := CNI
+	networkConfigDir := "/etc/cni/net.d"
 	if rootless.IsRootless() {
-		CNIConfigDir = filepath.Join(os.Getenv("HOME"), ".config/cni/net.d")
+		networkConfigDir = filepath.Join(os.Getenv("HOME"), ".config/cni/net.d")
 	}
-	if err := os.MkdirAll(CNIConfigDir, 0755); err != nil {
+
+	if strings.ToLower(os.Getenv("NETWORK_BACKEND")) == "netavark" {
+		networkBackend = Netavark
+		networkConfigDir = "/etc/containers/networks"
+		if rootless.IsRootless() {
+			networkConfigDir = filepath.Join(root, "etc", "networks")
+		}
+	}
+
+	if err := os.MkdirAll(root, 0755); err != nil {
+		panic(err)
+	}
+
+	if err := os.MkdirAll(networkConfigDir, 0755); err != nil {
 		panic(err)
 	}
 
@@ -251,7 +268,6 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 		storageFs = os.Getenv("STORAGE_FS")
 		storageOptions = "--storage-driver " + storageFs
 	}
-
 	p := &PodmanTestIntegration{
 		PodmanTest: PodmanTest{
 			PodmanBinary:       podmanBinary,
@@ -260,11 +276,12 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 			RemoteTest:         remote,
 			ImageCacheFS:       storageFs,
 			ImageCacheDir:      ImageCacheDir,
+			NetworkBackend:     networkBackend,
 		},
 		ConmonBinary:        conmonBinary,
-		Root:                filepath.Join(tempDir, "root"),
+		Root:                root,
 		TmpDir:              tempDir,
-		CNIConfigDir:        CNIConfigDir,
+		NetworkConfigDir:    networkConfigDir,
 		OCIRuntime:          ociRuntime,
 		RunRoot:             filepath.Join(tempDir, "runroot"),
 		StorageOptions:      storageOptions,
@@ -274,14 +291,32 @@ func PodmanTestCreateUtil(tempDir string, remote bool) *PodmanTestIntegration {
 	}
 
 	if remote {
-		uuid := stringid.GenerateNonCryptoID()
+		var pathPrefix string
 		if !rootless.IsRootless() {
-			p.RemoteSocket = fmt.Sprintf("unix:/run/podman/podman-%s.sock", uuid)
+			pathPrefix = "/run/podman/podman"
 		} else {
 			runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-			socket := fmt.Sprintf("podman-%s.sock", uuid)
-			fqpath := filepath.Join(runtimeDir, socket)
-			p.RemoteSocket = fmt.Sprintf("unix:%s", fqpath)
+			pathPrefix = filepath.Join(runtimeDir, "podman")
+		}
+		// We want to avoid collisions in socket paths, but using the
+		// socket directly for a collision check doesn’t work; bind(2) on AF_UNIX
+		// creates the file, and we need to pass a unique path now before the bind(2)
+		// happens. So, use a podman-%s.sock-lock empty file as a marker.
+		tries := 0
+		for {
+			uuid := stringid.GenerateNonCryptoID()
+			lockPath := fmt.Sprintf("%s-%s.sock-lock", pathPrefix, uuid)
+			lockFile, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+			if err == nil {
+				lockFile.Close()
+				p.RemoteSocketLock = lockPath
+				p.RemoteSocket = fmt.Sprintf("unix:%s-%s.sock", pathPrefix, uuid)
+				break
+			}
+			tries++
+			if tries >= 1000 {
+				panic("Too many RemoteSocket collisions")
+			}
 		}
 	}
 
@@ -701,6 +736,14 @@ func SkipIfRemote(reason string) {
 	Skip("[remote]: " + reason)
 }
 
+func SkipIfNotRemote(reason string) {
+	checkReason(reason)
+	if IsRemote() {
+		return
+	}
+	Skip("[local]: " + reason)
+}
+
 // SkipIfInContainer skips a test if the test is run inside a container
 func SkipIfInContainer(reason string) {
 	checkReason(reason)
@@ -725,6 +768,18 @@ func SkipIfNotActive(unit string, reason string) {
 	Expect(err).ToNot(HaveOccurred())
 	if strings.TrimSpace(buffer.String()) != "active" {
 		Skip(fmt.Sprintf("[systemd]: unit %s is not active: %s", unit, reason))
+	}
+}
+
+func SkipIfCNI(p *PodmanTestIntegration) {
+	if p.NetworkBackend == CNI {
+		Skip("this test is not compatible with the CNI network backend")
+	}
+}
+
+func SkipIfNetavark(p *PodmanTestIntegration) {
+	if p.NetworkBackend == Netavark {
+		Skip("This test is not compatible with the netavark network backend")
 	}
 }
 
@@ -789,7 +844,9 @@ func (p *PodmanTestIntegration) makeOptions(args []string, noEvents, noCache boo
 	if p.RemoteTest {
 		return args
 	}
-	var debug string
+	var (
+		debug string
+	)
 	if _, ok := os.LookupEnv("DEBUG"); ok {
 		debug = "--log-level=debug --syslog=true "
 	}
@@ -799,11 +856,18 @@ func (p *PodmanTestIntegration) makeOptions(args []string, noEvents, noCache boo
 		eventsType = "none"
 	}
 
-	podmanOptions := strings.Split(fmt.Sprintf("%s--root %s --runroot %s --runtime %s --conmon %s --cni-config-dir %s --cgroup-manager %s --tmpdir %s --events-backend %s",
-		debug, p.Root, p.RunRoot, p.OCIRuntime, p.ConmonBinary, p.CNIConfigDir, p.CgroupManager, p.TmpDir, eventsType), " ")
+	networkBackend := p.NetworkBackend.ToString()
+	networkDir := p.NetworkConfigDir
+	if p.NetworkBackend == Netavark {
+		networkDir = p.NetworkConfigDir
+	}
+	podmanOptions := strings.Split(fmt.Sprintf("%s--root %s --runroot %s --runtime %s --conmon %s --network-config-dir %s --cgroup-manager %s --tmpdir %s --events-backend %s",
+		debug, p.Root, p.RunRoot, p.OCIRuntime, p.ConmonBinary, networkDir, p.CgroupManager, p.TmpDir, eventsType), " ")
 	if os.Getenv("HOOK_OPTION") != "" {
 		podmanOptions = append(podmanOptions, os.Getenv("HOOK_OPTION"))
 	}
+
+	podmanOptions = append(podmanOptions, "--network-backend", networkBackend)
 
 	podmanOptions = append(podmanOptions, strings.Split(p.StorageOptions, " ")...)
 	if !noCache {
@@ -816,6 +880,11 @@ func (p *PodmanTestIntegration) makeOptions(args []string, noEvents, noCache boo
 }
 
 func writeConf(conf []byte, confPath string) {
+	if _, err := os.Stat(filepath.Dir(confPath)); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(confPath), 777); err != nil {
+			fmt.Println(err)
+		}
+	}
 	if err := ioutil.WriteFile(confPath, conf, 777); err != nil {
 		fmt.Println(err)
 	}
@@ -827,13 +896,18 @@ func removeConf(confPath string) {
 	}
 }
 
-// generateNetworkConfig generates a cni config with a random name
+// generateNetworkConfig generates a CNI or Netavark config with a random name
 // it returns the network name and the filepath
 func generateNetworkConfig(p *PodmanTestIntegration) (string, string) {
+	var (
+		path string
+		conf string
+	)
 	// generate a random name to prevent conflicts with other tests
 	name := "net" + stringid.GenerateNonCryptoID()
-	path := filepath.Join(p.CNIConfigDir, fmt.Sprintf("%s.conflist", name))
-	conf := fmt.Sprintf(`{
+	if p.NetworkBackend != Netavark {
+		path = filepath.Join(p.NetworkConfigDir, fmt.Sprintf("%s.conflist", name))
+		conf = fmt.Sprintf(`{
 		"cniVersion": "0.3.0",
 		"name": "%s",
 		"plugins": [
@@ -858,12 +932,35 @@ func generateNetworkConfig(p *PodmanTestIntegration) (string, string) {
 		  }
 		]
 	}`, name)
+	} else {
+		path = filepath.Join(p.NetworkConfigDir, fmt.Sprintf("%s.json", name))
+		conf = fmt.Sprintf(`
+{
+     "name": "%s",
+     "id": "e1ef2749024b88f5663ca693a9118e036d6bfc48bcfe460faf45e9614a513e5c",
+     "driver": "bridge",
+     "network_interface": "netavark1",
+     "created": "2022-01-05T14:15:10.975493521-06:00",
+     "subnets": [
+          {
+               "subnet": "10.100.0.0/16",
+               "gateway": "10.100.0.1"
+          }
+     ],
+     "ipv6_enabled": false,
+     "internal": false,
+     "dns_enabled": true,
+     "ipam_options": {
+          "driver": "host-local"
+     }
+}
+`, name)
+	}
 	writeConf([]byte(conf), path)
-
 	return name, path
 }
 
-func (p *PodmanTestIntegration) removeCNINetwork(name string) {
+func (p *PodmanTestIntegration) removeNetwork(name string) {
 	session := p.Podman([]string{"network", "rm", "-f", name})
 	session.WaitWithDefaultTimeout()
 	Expect(session.ExitCode()).To(BeNumerically("<=", 1), "Exit code must be 0 or 1")
@@ -910,4 +1007,62 @@ func writeYaml(content string, fileName string) error {
 	}
 
 	return nil
+}
+
+// GetPort finds an unused port on the system
+func GetPort() int {
+	a, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		Fail(fmt.Sprintf("unable to get free port: %v", err))
+	}
+
+	l, err := net.ListenTCP("tcp", a)
+	if err != nil {
+		Fail(fmt.Sprintf("unable to get free port: %v", err))
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func ncz(port int) bool {
+	timeout := 500 * time.Millisecond
+	for i := 0; i < 5; i++ {
+		ncCmd := []string{"-z", "localhost", fmt.Sprintf("%d", port)}
+		fmt.Printf("Running: nc %s\n", strings.Join(ncCmd, " "))
+		check := SystemExec("nc", ncCmd)
+		if check.ExitCode() == 0 {
+			return true
+		}
+		time.Sleep(timeout)
+		timeout++
+	}
+	return false
+}
+
+func createNetworkName(name string) string {
+	return name + stringid.GenerateNonCryptoID()[:10]
+}
+
+var IPRegex = `(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}`
+
+// digShort execs into the given container and does a dig lookup with a timeout
+// backoff.  If it gets a response, it ensures that the output is in the correct
+// format and iterates a string array for match
+func digShort(container, lookupName string, matchNames []string, p *PodmanTestIntegration) string {
+	digInterval := time.Millisecond * 250
+	for i := 0; i < 6; i++ {
+		time.Sleep(digInterval * time.Duration(i))
+		dig := p.Podman([]string{"exec", container, "dig", "+short", lookupName})
+		dig.WaitWithDefaultTimeout()
+		if dig.ExitCode() == 0 {
+			output := dig.OutputToString()
+			Expect(output).To(MatchRegexp(IPRegex))
+			for _, name := range matchNames {
+				Expect(output).To(Equal(name))
+			}
+			return output
+		}
+	}
+	Fail("dns is not responding")
+	return ""
 }

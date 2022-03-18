@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/containers/common/libimage"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	docker "github.com/docker/docker/api/types"
 	dockerContainer "github.com/docker/docker/api/types/container"
 	dockerNetwork "github.com/docker/docker/api/types/network"
@@ -51,6 +51,17 @@ type LibpodContainersPruneReport struct {
 	// x-omitempty: true
 	// x-nullable: true
 	PruneError string `json:"Err,omitempty"`
+}
+
+type LibpodContainersRmReport struct {
+	ID string `json:"Id"`
+	// Error which occurred during Rm operation (if any).
+	// This field is optional and may be omitted if no error occurred.
+	//
+	// Extensions:
+	// x-omitempty: true
+	// x-nullable: true
+	RmError string `json:"Err,omitempty"`
 }
 
 type Info struct {
@@ -137,7 +148,7 @@ type PodTopOKBody struct {
 // swagger:model PodCreateConfig
 type PodCreateConfig struct {
 	Name         string   `json:"name"`
-	CGroupParent string   `json:"cgroup-parent"`
+	CgroupParent string   `json:"cgroup-parent"`
 	Hostname     string   `json:"hostname"`
 	Infra        bool     `json:"infra"`
 	InfraCommand string   `json:"infra-command"`
@@ -171,46 +182,6 @@ type ExecStartConfig struct {
 	Tty    bool   `json:"Tty"`
 	Height uint16 `json:"h"`
 	Width  uint16 `json:"w"`
-}
-
-func ImageToImageSummary(l *libimage.Image) (*entities.ImageSummary, error) {
-	options := &libimage.InspectOptions{WithParent: true, WithSize: true}
-	imageData, err := l.Inspect(context.TODO(), options)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to obtain summary for image %s", l.ID())
-	}
-
-	containers, err := l.Containers()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to obtain Containers for image %s", l.ID())
-	}
-	containerCount := len(containers)
-
-	isDangling, err := l.IsDangling(context.TODO())
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to check if image %s is dangling", l.ID())
-	}
-
-	is := entities.ImageSummary{
-		// docker adds sha256: in front of the ID
-		ID:           "sha256:" + l.ID(),
-		ParentId:     imageData.Parent,
-		RepoTags:     imageData.RepoTags,
-		RepoDigests:  imageData.RepoDigests,
-		Created:      l.Created().Unix(),
-		Size:         imageData.Size,
-		SharedSize:   0,
-		VirtualSize:  imageData.VirtualSize,
-		Labels:       imageData.Labels,
-		Containers:   containerCount,
-		ReadOnly:     l.IsReadOnly(),
-		Dangling:     isDangling,
-		Names:        l.Names(),
-		Digest:       string(imageData.Digest),
-		ConfigDigest: "", // TODO: libpod/image didn't set it but libimage should
-		History:      imageData.NamesHistory,
-	}
-	return &is, nil
 }
 
 func ImageDataToImageInspect(ctx context.Context, l *libimage.Image) (*ImageInspect, error) {

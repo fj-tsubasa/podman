@@ -35,8 +35,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/containers/podman/v3/pkg/rootless"
-	. "github.com/containers/podman/v3/test/utils"
+	"github.com/containers/podman/v4/pkg/rootless"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -118,7 +118,7 @@ var _ = Describe("Toolbox-specific testing", func() {
 		if podmanTest.RemoteTest {
 			Skip("Shm size check does not work with a remote client")
 		}
-		SkipIfRootlessCgroupsV1("Not supported for rootless + CGroupsV1")
+		SkipIfRootlessCgroupsV1("Not supported for rootless + CgroupsV1")
 		var session *PodmanSessionIntegration
 		var cmd *exec.Cmd
 		var hostShmSize, containerShmSize int

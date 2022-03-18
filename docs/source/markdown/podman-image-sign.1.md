@@ -33,7 +33,7 @@ environment variable. `export REGISTRY_AUTH_FILE=path`
 #### **--cert-dir**=*path*
 
 Use certificates at *path* (\*.crt, \*.cert, \*.key) to connect to the registry. (Default: /etc/containers/certs.d)
-Please refer to containers-certs.d(5) for details. (This option is not available with the remote Podman client)
+Please refer to containers-certs.d(5) for details. (This option is not available with the remote Podman client, including Mac and Windows (excluding WSL2) machines)
 
 #### **--directory**, **-d**=*dir*
 
@@ -56,7 +56,7 @@ The write (and read) location for signatures is defined in YAML-based
 configuration files in /etc/containers/registries.d/ for root,
 or $HOME/.config/containers/registries.d for non-root users.  When you sign
 an image, Podman will use those configuration files to determine
-where to write the signature based on the the name of the originating
+where to write the signature based on the name of the originating
 registry or a default storage value unless overridden with the --directory
 option. For example, consider the following configuration file.
 

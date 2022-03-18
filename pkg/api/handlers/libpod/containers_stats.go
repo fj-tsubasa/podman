@@ -5,12 +5,12 @@ import (
 	"net/http"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/infra/abi"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/infra/abi"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -25,7 +25,7 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 		// if so, then verify cgroup v2 available (more expensive check)
 		if isV2, _ := cgroups.IsCgroup2UnifiedMode(); !isV2 {
 			msg := "Container stats resource only available for cgroup v2"
-			utils.Error(w, msg, http.StatusConflict, errors.New(msg))
+			utils.Error(w, http.StatusConflict, errors.New(msg))
 			return
 		}
 	}
@@ -39,7 +39,7 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 		Interval: 5,
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 

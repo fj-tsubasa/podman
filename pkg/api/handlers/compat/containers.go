@@ -10,17 +10,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/filters"
-	"github.com/containers/podman/v3/pkg/domain/infra/abi"
-	"github.com/containers/podman/v3/pkg/ps"
-	"github.com/containers/podman/v3/pkg/signal"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/filters"
+	"github.com/containers/podman/v4/pkg/domain/infra/abi"
+	"github.com/containers/podman/v4/pkg/ps"
+	"github.com/containers/podman/v4/pkg/signal"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -36,6 +36,7 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 	query := struct {
 		Force         bool  `schema:"force"`
 		Ignore        bool  `schema:"ignore"`
+		Depend        bool  `schema:"depend"`
 		Link          bool  `schema:"link"`
 		Timeout       *uint `schema:"timeout"`
 		DockerVolumes bool  `schema:"v"`
@@ -45,8 +46,7 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-			errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -57,10 +57,10 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 	if utils.IsLibpodRequest(r) {
 		options.Volumes = query.LibpodVolumes
 		options.Timeout = query.Timeout
+		options.Depend = query.Depend
 	} else {
 		if query.Link {
-			utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest,
-				utils.ErrLinkNotSupport)
+			utils.Error(w, http.StatusBadRequest, utils.ErrLinkNotSupport)
 			return
 		}
 		options.Volumes = query.DockerVolumes
@@ -71,7 +71,7 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 	// code.
 	containerEngine := abi.ContainerEngine{Libpod: runtime}
 	name := utils.GetName(r)
-	report, err := containerEngine.ContainerRm(r.Context(), []string{name}, options)
+	reports, err := containerEngine.ContainerRm(r.Context(), []string{name}, options)
 	if err != nil {
 		if errors.Cause(err) == define.ErrNoSuchCtr {
 			utils.ContainerNotFound(w, name, err)
@@ -81,8 +81,8 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 		utils.InternalServerError(w, err)
 		return
 	}
-	if len(report) > 0 && report[0].Err != nil {
-		err = report[0].Err
+	if len(reports) > 0 && reports[0].Err != nil {
+		err = reports[0].Err
 		if errors.Cause(err) == define.ErrNoSuchCtr {
 			utils.ContainerNotFound(w, name, err)
 			return
@@ -90,7 +90,10 @@ func RemoveContainer(w http.ResponseWriter, r *http.Request) {
 		utils.InternalServerError(w, err)
 		return
 	}
-
+	if utils.IsLibpodRequest(r) {
+		utils.WriteResponse(w, http.StatusOK, reports)
+		return
+	}
 	utils.WriteResponse(w, http.StatusNoContent, nil)
 }
 
@@ -107,12 +110,12 @@ func ListContainers(w http.ResponseWriter, r *http.Request) {
 
 	filterMap, err := util.PrepareFilters(r)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to decode filter parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to decode filter parameters for %s", r.URL.String()))
 		return
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -184,7 +187,7 @@ func GetContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -212,7 +215,7 @@ func KillContainer(w http.ResponseWriter, r *http.Request) {
 		Signal: "KILL",
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -227,7 +230,7 @@ func KillContainer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Cause(err) == define.ErrCtrStateInvalid ||
 			errors.Cause(err) == define.ErrCtrStopped {
-			utils.Error(w, fmt.Sprintf("Container %s is not running", name), http.StatusConflict, err)
+			utils.Error(w, http.StatusConflict, err)
 			return
 		}
 		if errors.Cause(err) == define.ErrNoSuchCtr {
@@ -257,7 +260,7 @@ func KillContainer(w http.ResponseWriter, r *http.Request) {
 				Interval:  time.Millisecond * 250,
 			}
 			if _, err := containerEngine.ContainerWait(r.Context(), []string{name}, opts); err != nil {
-				utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
+				utils.Error(w, http.StatusInternalServerError, err)
 				return
 			}
 		}
@@ -356,11 +359,20 @@ func LibpodToContainer(l *libpod.Container, sz bool) (*handlers.Container, error
 		return nil, err
 	}
 
+	m, err := json.Marshal(inspect.Mounts)
+	if err != nil {
+		return nil, err
+	}
+	mounts := []types.MountPoint{}
+	if err := json.Unmarshal(m, &mounts); err != nil {
+		return nil, err
+	}
+
 	return &handlers.Container{Container: types.Container{
 		ID:         l.ID(),
 		Names:      []string{fmt.Sprintf("/%s", l.Name())},
 		Image:      imageName,
-		ImageID:    imageID,
+		ImageID:    "sha256:" + imageID,
 		Command:    strings.Join(l.Command(), " "),
 		Created:    l.CreatedTime().Unix(),
 		Ports:      ports,
@@ -374,7 +386,7 @@ func LibpodToContainer(l *libpod.Container, sz bool) (*handlers.Container, error
 		}{
 			"host"},
 		NetworkSettings: &networkSettings,
-		Mounts:          nil,
+		Mounts:          mounts,
 	},
 		ContainerCreateConfig: types.ContainerCreateConfig{},
 	}, nil
@@ -599,7 +611,7 @@ func RenameContainer(w http.ResponseWriter, r *http.Request) {
 		Name string `schema:"name"`
 	}{}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -611,7 +623,7 @@ func RenameContainer(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := runtime.RenameContainer(r.Context(), ctr, query.Name); err != nil {
 		if errors.Cause(err) == define.ErrPodExists || errors.Cause(err) == define.ErrCtrExists {
-			utils.Error(w, "Something went wrong.", http.StatusConflict, err)
+			utils.Error(w, http.StatusConflict, err)
 			return
 		}
 		utils.InternalServerError(w, err)

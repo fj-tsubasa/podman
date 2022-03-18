@@ -8,10 +8,10 @@ import (
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/spf13/cobra"
 )
 
@@ -89,9 +89,7 @@ Client:\tPodman Engine
 Version:\t{{.Version}}
 API Version:\t{{.APIVersion}}
 Go Version:\t{{.GoVersion}}
-{{if .GitCommit -}}
-  Git Commit:\t{{.GitCommit}}
-{{- end}}
+{{if .GitCommit -}}Git Commit:\t{{.GitCommit}}\n{{end -}}
 Built:\t{{.BuiltTime}}
 OS/Arch:\t{{.OsArch}}
 {{- end}}
@@ -102,9 +100,7 @@ Server:\tPodman Engine
 Version:\t{{.Version}}
 API Version:\t{{.APIVersion}}
 Go Version:\t{{.GoVersion}}
-{{if .GitCommit -}}
-  Git Commit:\t{{.GitCommit}}
-{{- end}}
+{{if .GitCommit -}}Git Commit:\t{{.GitCommit}}\n{{end -}}
 Built:\t{{.BuiltTime}}
 OS/Arch:\t{{.OsArch}}
 {{- end}}{{- end}}

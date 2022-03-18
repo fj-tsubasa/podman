@@ -16,13 +16,13 @@ import (
 	"github.com/containers/buildah"
 	buildahDefine "github.com/containers/buildah/define"
 	"github.com/containers/buildah/pkg/parse"
-	"github.com/containers/buildah/util"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/auth"
-	"github.com/containers/podman/v3/pkg/channel"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/auth"
+	"github.com/containers/podman/v4/pkg/channel"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/containers/storage/pkg/archive"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/gorilla/schema"
@@ -74,6 +74,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		AdditionalCapabilities string   `schema:"addcaps"`
 		Annotations            string   `schema:"annotations"`
 		AppArmor               string   `schema:"apparmor"`
+		AllPlatforms           bool     `schema:"allplatforms"`
 		BuildArgs              string   `schema:"buildargs"`
 		CacheFrom              string   `schema:"cachefrom"`
 		Compression            uint64   `schema:"compression"`
@@ -122,6 +123,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		Target                 string   `schema:"target"`
 		Timestamp              int64    `schema:"timestamp"`
 		Ulimits                string   `schema:"ulimits"`
+		UnsetEnvs              []string `schema:"unsetenv"`
 		Secrets                string   `schema:"secrets"`
 	}{
 		Dockerfile: "Dockerfile",
@@ -132,13 +134,13 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 
 	decoder := r.Context().Value(api.DecoderKey).(*schema.Decoder)
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest, err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 
 	// if layers field not set assume its not from a valid podman-client
 	// could be a docker client, set `layers=true` since that is the default
-	// expected behviour
+	// expected behaviour
 	if !utils.IsLibpodRequest(r) {
 		if _, found := r.URL.Query()["layers"]; !found {
 			query.Layers = true
@@ -290,7 +292,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	if len(tags) > 0 {
 		possiblyNormalizedName, err := utils.NormalizeToDockerHub(r, tags[0])
 		if err != nil {
-			utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
 			return
 		}
 		output = possiblyNormalizedName
@@ -299,7 +301,17 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	registry := query.Registry
 	isolation := buildah.IsolationDefault
 	if utils.IsLibpodRequest(r) {
-		isolation = parseLibPodIsolation(query.Isolation)
+		var err error
+		isolation, err = parseLibPodIsolation(query.Isolation)
+		if err != nil {
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "failed to parse isolation"))
+			return
+		}
+
+		// make sure to force rootless as rootless otherwise buildah runs code which is intended to be run only as root.
+		if isolation == buildah.IsolationOCI && rootless.IsRootless() {
+			isolation = buildah.IsolationOCIRootless
+		}
 		registry = ""
 		format = query.OutputFormat
 	} else {
@@ -313,7 +325,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	for i := 1; i < len(tags); i++ {
 		possiblyNormalizedTag, err := utils.NormalizeToDockerHub(r, tags[i])
 		if err != nil {
-			utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
 			return
 		}
 		additionalTags = append(additionalTags, possiblyNormalizedTag)
@@ -453,10 +465,10 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	creds, authfile, key, err := auth.GetCredentials(r)
+	creds, authfile, err := auth.GetCredentials(r)
 	if err != nil {
 		// Credential value(s) not returned as their value is not human readable
-		utils.BadRequest(w, key.String(), "n/a", err)
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 	defer auth.RemoveAuthfile(authfile)
@@ -465,7 +477,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	if fromImage != "" {
 		possiblyNormalizedName, err := utils.NormalizeToDockerHub(r, fromImage)
 		if err != nil {
-			utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
+			utils.Error(w, http.StatusInternalServerError, errors.Wrap(err, "error normalizing image"))
 			return
 		}
 		fromImage = possiblyNormalizedName
@@ -491,16 +503,12 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	defer reporter.Close()
 
 	runtime := r.Context().Value(api.RuntimeKey).(*libpod.Runtime)
-	rtc, err := runtime.GetConfig()
-	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrap(err, "Decode()"))
-		return
-	}
 	buildOptions := buildahDefine.BuildOptions{
 		AddCapabilities: addCaps,
 		AdditionalTags:  additionalTags,
 		Annotations:     annotations,
 		Args:            buildArgs,
+		AllPlatforms:    query.AllPlatforms,
 		CommonBuildOpts: &buildah.CommonBuildOptions{
 			AddHost:            addhosts,
 			ApparmorProfile:    apparmor,
@@ -522,8 +530,6 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 			Ulimit:             ulimits,
 			Secrets:            secrets,
 		},
-		CNIConfigDir:                   rtc.Network.CNIPluginDirs[0],
-		CNIPluginPath:                  util.DefaultCNIPluginPath,
 		Compression:                    compression,
 		ConfigureNetwork:               parseNetworkConfigurationPolicy(query.ConfigureNetwork),
 		ContextDirectory:               contextDirectory,
@@ -556,6 +562,7 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 		Squash:                         query.Squash,
 		Target:                         query.Target,
 		SystemContext:                  systemContext,
+		UnsetEnvs:                      query.UnsetEnvs,
 	}
 
 	for _, platformSpec := range query.Platform {
@@ -598,8 +605,8 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send headers and prime client for stream to come
-	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	flush()
 
 	body := w.(io.Writer)
@@ -621,7 +628,8 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 			Stream string                 `json:"stream,omitempty"`
 			Error  *jsonmessage.JSONError `json:"errorDetail,omitempty"`
 			// NOTE: `error` is being deprecated check https://github.com/moby/moby/blob/master/pkg/jsonmessage/jsonmessage.go#L148
-			ErrorMessage string `json:"error,omitempty"` // deprecate this slowly
+			ErrorMessage string          `json:"error,omitempty"` // deprecate this slowly
+			Aux          json.RawMessage `json:"aux,omitempty"`
 		}{}
 
 		select {
@@ -655,7 +663,12 @@ func BuildImage(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-runCtx.Done():
 			if success {
-				if !utils.IsLibpodRequest(r) {
+				if !utils.IsLibpodRequest(r) && !query.Quiet {
+					m.Aux = []byte(fmt.Sprintf(`{"ID":"sha256:%s"}`, imageID))
+					if err := enc.Encode(m); err != nil {
+						logrus.Warnf("failed to json encode error %v", err)
+					}
+					m.Aux = nil
 					m.Stream = fmt.Sprintf("Successfully built %12.12s\n", imageID)
 					if err := enc.Encode(m); err != nil {
 						logrus.Warnf("Failed to json encode error %v", err)
@@ -696,22 +709,11 @@ func parseNetworkConfigurationPolicy(network string) buildah.NetworkConfiguratio
 	}
 }
 
-func parseLibPodIsolation(isolation string) buildah.Isolation { // nolint
+func parseLibPodIsolation(isolation string) (buildah.Isolation, error) { // nolint
 	if val, err := strconv.Atoi(isolation); err == nil {
-		return buildah.Isolation(val)
+		return buildah.Isolation(val), nil
 	}
-	switch isolation {
-	case "IsolationDefault", "default":
-		return buildah.IsolationDefault
-	case "IsolationOCI":
-		return buildah.IsolationOCI
-	case "IsolationChroot":
-		return buildah.IsolationChroot
-	case "IsolationOCIRootless":
-		return buildah.IsolationOCIRootless
-	default:
-		return buildah.IsolationDefault
-	}
+	return parse.IsolationOption(isolation)
 }
 
 func extractTarFile(r *http.Request) (string, error) {

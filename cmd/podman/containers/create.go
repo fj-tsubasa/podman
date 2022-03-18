@@ -11,16 +11,17 @@ import (
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/transports/alltransports"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/specgen"
-	"github.com/containers/podman/v3/pkg/specgenutil"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/specgen"
+	"github.com/containers/podman/v4/pkg/specgenutil"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/mattn/go-isatty"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +70,7 @@ func createFlags(cmd *cobra.Command) {
 	)
 
 	flags.SetInterspersed(false)
-	common.DefineCreateFlags(cmd, &cliVals, false)
+	common.DefineCreateFlags(cmd, &cliVals, false, false)
 	common.DefineNetFlags(cmd)
 
 	flags.SetNormalizeFunc(utils.AliasFlags)
@@ -105,7 +106,7 @@ func create(cmd *cobra.Command, args []string) error {
 		err error
 	)
 	flags := cmd.Flags()
-	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags, cliVals.Pod == "" && cliVals.PodIDFile == "")
+	cliVals.Net, err = common.NetFlagsToNetOptions(nil, *flags)
 	if err != nil {
 		return err
 	}
@@ -191,6 +192,10 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 			vals.UserNS = "private"
 		}
 	}
+	if c.Flag("kernel-memory") != nil && c.Flag("kernel-memory").Changed {
+		logrus.Warnf("The --kernel-memory flag is no longer supported. This flag is a noop.")
+	}
+
 	if cliVals.LogDriver == define.PassthroughLogging {
 		if isatty.IsTerminal(0) || isatty.IsTerminal(1) || isatty.IsTerminal(2) {
 			return vals, errors.New("the '--log-driver passthrough' option cannot be used on a TTY")
@@ -252,8 +257,8 @@ func CreateInit(c *cobra.Command, vals entities.ContainerCreateOptions, isInfra 
 			}
 			vals.Env = env
 		}
-		if c.Flag("cgroups").Changed && vals.CGroupsMode == "split" && registry.IsRemote() {
-			return vals, errors.Errorf("the option --cgroups=%q is not supported in remote mode", vals.CGroupsMode)
+		if c.Flag("cgroups").Changed && vals.CgroupsMode == "split" && registry.IsRemote() {
+			return vals, errors.Errorf("the option --cgroups=%q is not supported in remote mode", vals.CgroupsMode)
 		}
 
 		if c.Flag("pod").Changed && !strings.HasPrefix(c.Flag("pod").Value.String(), "new:") && c.Flag("userns").Changed {
@@ -383,10 +388,7 @@ func createPodIfNecessary(cmd *cobra.Command, s *specgen.SpecGenerator, netOpts 
 	if err != nil {
 		return nil, err
 	}
-	imageName := config.DefaultInfraImage
-	podGen.InfraImage = imageName
-	podGen.InfraContainerSpec = specgen.NewSpecGenerator(imageName, false)
-	podGen.InfraContainerSpec.RawImageName = imageName
+	podGen.InfraContainerSpec = specgen.NewSpecGenerator("", false)
 	podGen.InfraContainerSpec.NetworkOptions = podGen.NetworkOptions
 	err = specgenutil.FillOutSpecGen(podGen.InfraContainerSpec, &infraOpts, []string{})
 	if err != nil {

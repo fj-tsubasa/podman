@@ -18,7 +18,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/containers/podman/v3/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/errorhandling"
 	"github.com/containers/storage/pkg/idtools"
 	pmount "github.com/containers/storage/pkg/mount"
 	"github.com/containers/storage/pkg/unshare"
@@ -145,8 +145,8 @@ func tryMappingTool(uid bool, pid int, hostID int, mappings []idtools.IDMap) err
 	}
 
 	if output, err := cmd.CombinedOutput(); err != nil {
-		logrus.Debugf("error from %s: %s", tool, output)
-		return errors.Wrapf(err, "cannot setup namespace using %s", tool)
+		logrus.Errorf("error running `%s`: %s", strings.Join(args, " "), output)
+		return errors.Wrapf(err, "cannot setup namespace using %q", path)
 	}
 	return nil
 }
@@ -390,11 +390,11 @@ func becomeRootInUserNS(pausePid, fileToRead string, fileOutput *os.File) (_ boo
 				return joinUserAndMountNS(uint(pid), "")
 			}
 		}
-		return false, -1, errors.Wrapf(err, "error setting up the process")
+		return false, -1, errors.New("error setting up the process")
 	}
 
 	if b[0] != '0' {
-		return false, -1, errors.Wrapf(err, "error setting up the process")
+		return false, -1, errors.New("error setting up the process")
 	}
 
 	signals := []os.Signal{}

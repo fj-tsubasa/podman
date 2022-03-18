@@ -2,6 +2,8 @@ package entities
 
 import (
 	"net"
+
+	"github.com/containers/common/libnetwork/types"
 )
 
 // NetworkListOptions describes options for listing networks in cli
@@ -41,12 +43,12 @@ type NetworkRmReport struct {
 type NetworkCreateOptions struct {
 	DisableDNS bool
 	Driver     string
-	Gateway    net.IP
+	Gateways   []net.IP
 	Internal   bool
 	Labels     map[string]string
 	MacVLAN    string
-	Range      net.IPNet
-	Subnet     net.IPNet
+	Ranges     []string
+	Subnets    []string
 	IPv6       bool
 	// Mapping of driver options and values.
 	Options map[string]string
@@ -67,8 +69,8 @@ type NetworkDisconnectOptions struct {
 // NetworkConnectOptions describes options for connecting
 // a container to a network
 type NetworkConnectOptions struct {
-	Aliases   []string
-	Container string
+	Container string `json:"container"`
+	types.PerNetworkOptions
 }
 
 // NetworkPruneReport containers the name of network and an error

@@ -44,6 +44,7 @@ MANDIR ?= ${PREFIX}/share/man
 SHAREDIR_CONTAINERS ?= ${PREFIX}/share/containers
 ETCDIR ?= ${PREFIX}/etc
 TMPFILESDIR ?= ${PREFIX}/lib/tmpfiles.d
+MODULESLOADDIR ?= ${PREFIX}/lib/modules-load.d
 SYSTEMDDIR ?= ${PREFIX}/lib/systemd/system
 USERSYSTEMDDIR ?= ${PREFIX}/lib/systemd/user
 REMOTETAGS ?= remote exclude_graphdriver_btrfs btrfs_noversion exclude_graphdriver_devicemapper containers_image_openpgp
@@ -94,13 +95,14 @@ else
 	BUILD_INFO ?= $(shell date "+$(DATE_FMT)")
 	ISODATE ?= $(shell date --iso-8601)
 endif
-LIBPOD := ${PROJECT}/v3/libpod
+LIBPOD := ${PROJECT}/v4/libpod
 GOFLAGS ?= -trimpath
 LDFLAGS_PODMAN ?= \
 	-X $(LIBPOD)/define.gitCommit=$(GIT_COMMIT) \
 	-X $(LIBPOD)/define.buildInfo=$(BUILD_INFO) \
 	-X $(LIBPOD)/config._installPrefix=$(PREFIX) \
 	-X $(LIBPOD)/config._etcDir=$(ETCDIR) \
+	-X github.com/containers/common/pkg/config.additionalHelperBinariesDir=$(HELPER_BINARIES_DIR)\
 	$(EXTRA_LDFLAGS)
 LDFLAGS_PODMAN_STATIC ?= \
 	$(LDFLAGS_PODMAN) \
@@ -185,6 +187,13 @@ ifdef HOMEBREW_PREFIX
 	DARWIN_GCO := 1
 endif
 endif
+
+# win-sshproxy is checked out manually to keep from pulling in gvisor and it's transitive
+# dependencies. This is only used for the Windows installer task (podman.msi), which must
+# include this lightweight helper binary.
+#
+GV_GITURL=https://github.com/containers/gvisor-tap-vsock.git
+GV_SHA=e943b1806d94d387c4c38d96719432d50a84bbd0
 
 ###
 ### Primary entry-point targets
@@ -275,7 +284,7 @@ test/version/version: .gopathok version/version.go
 
 .PHONY: codespell
 codespell:
-	codespell -S bin,vendor,.git,go.sum,.cirrus.yml,"RELEASE_NOTES.md,*.xz,*.gz,*.ps1,*.tar,*.tgz,bin2img,*ico,*.png,*.1,*.5,copyimg,*.orig,apidoc.go" -L uint,iff,od,seeked,splitted,marge,ERRO,hist,ether -w
+	codespell -S bin,vendor,.git,go.sum,.cirrus.yml,"RELEASE_NOTES.md,*.xz,*.gz,*.ps1,*.tar,swagger.yaml,*.tgz,bin2img,*ico,*.png,*.1,*.5,copyimg,*.orig,apidoc.go" -L uint,iff,od,seeked,splitted,marge,ERRO,hist,ether -w
 
 .PHONY: validate
 validate: gofmt lint .gitvalidation validate.completions man-page-check swagger-check tests-included tests-expect-exit
@@ -295,7 +304,7 @@ vendor:
 vendor-in-container:
 	podman run --privileged --rm --env HOME=/root \
 		-v $(CURDIR):/src -w /src \
-		docker.io/library/golang:1.16 \
+		docker.io/library/golang:1.17 \
 		make vendor
 
 ###
@@ -358,13 +367,33 @@ podman-remote-windows: ## Build podman-remote for Windows
 		GOOS=windows \
 		bin/windows/podman.exe
 
+.PHONY: podman-winpath
+podman-winpath: .gopathok $(SOURCES) go.mod go.sum
+	CGO_ENABLED=0 \
+		GOOS=windows \
+		$(GO) build \
+		$(BUILDFLAGS) \
+		-ldflags -H=windowsgui \
+		-o bin/windows/winpath.exe \
+		./cmd/winpath
+
 .PHONY: podman-remote-darwin
-podman-remote-darwin: ## Build podman-remote for macOS
+podman-remote-darwin: podman-mac-helper ## Build podman-remote for macOS
 	$(MAKE) \
 		CGO_ENABLED=$(DARWIN_GCO) \
 		GOOS=darwin \
 		GOARCH=$(GOARCH) \
 		bin/darwin/podman
+
+.PHONY: podman-mac-helper
+podman-mac-helper: ## Build podman-mac-helper for macOS
+	CGO_ENABLED=0 \
+		GOOS=darwin \
+		GOARCH=$(GOARCH) \
+		$(GO) build \
+		$(BUILDFLAGS) \
+		-o bin/darwin/podman-mac-helper \
+		./cmd/podman-mac-helper
 
 bin/rootlessport: .gopathok $(SOURCES) go.mod go.sum
 	CGO_ENABLED=$(CGO_ENABLED) \
@@ -512,13 +541,13 @@ validate.completions:
 .PHONY: run-docker-py-tests
 run-docker-py-tests:
 	touch test/__init__.py
-	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf pytest test/python/docker/
-	-rm test/__init__.py
+	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf pytest --disable-warnings test/python/docker/
+	rm -f test/__init__.py
 
 .PHONY: localunit
 localunit: test/goecho/goecho test/version/version
 	rm -rf ${COVERAGE_PATH} && mkdir -p ${COVERAGE_PATH}
-	$(GOBIN)/ginkgo \
+	UNIT=1 $(GOBIN)/ginkgo \
 		-r \
 		$(TESTFLAGS) \
 		--skipPackage test/e2e,pkg/apparmor,pkg/bindings,hack \
@@ -537,6 +566,7 @@ test: localunit localintegration remoteintegration localsystem remotesystem  ## 
 
 .PHONY: ginkgo-run
 ginkgo-run:
+	$(GOBIN)/ginkgo version
 	$(GOBIN)/ginkgo -v $(TESTFLAGS) -tags "$(TAGS)" $(GINKGOTIMEOUT) -cover -flakeAttempts 3 -progress -trace -noColor -nodes 3 -debug test/e2e/. $(HACK)
 
 .PHONY: ginkgo
@@ -593,9 +623,15 @@ remotesystem:
 
 .PHONY: localapiv2
 localapiv2:
-	env PODMAN=./bin/podman ./test/apiv2/test-apiv2
-	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf PODMAN=./bin/podman ${PYTHON} -m unittest discover -v ./test/apiv2/python
-	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf PODMAN=./bin/podman ${PYTHON} -m unittest discover -v ./test/python/docker
+	# Order is important running python tests first causes the bash tests to fail, see 12-imagesMore
+	# FIXME order of tests should not matter
+	env PODMAN=./bin/podman stdbuf -o0 -e0 ./test/apiv2/test-apiv2
+	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf PODMAN=./bin/podman \
+		pytest --disable-warnings ./test/apiv2/python
+	touch test/__init__.py
+	env CONTAINERS_CONF=$(CURDIR)/test/apiv2/containers.conf PODMAN=./bin/podman \
+		pytest --disable-warnings ./test/python/docker
+	rm -f test/__init__.py
 
 .PHONY: remoteapiv2
 remoteapiv2:
@@ -653,7 +689,7 @@ podman-release-%.tar.gz: test/version/version
 	else \
 		$(MAKE) GOOS=$(GOOS) GOARCH=$(GOARCH) binaries; \
 	fi
-	$(MAKE) $(_DSTARGS) install.bin-nobuild install.remote-nobuild install.man install.systemd
+	$(MAKE) $(_DSTARGS) install.bin install.remote install.man install.systemd
 	tar -czvf $@ --xattrs -C "$(TMPDIR)" "./$(SUBDIR)"
 	if [[ "$(GOARCH)" != "$(NATIVE_GOARCH)" ]]; then $(MAKE) clean-binaries; fi
 	-rm -rf "$(TMPDIR)"
@@ -676,7 +712,7 @@ podman-remote-release-%.zip: test/version/version ## Build podman-remote for %=$
 	fi
 	cp -r ./docs/build/remote/$(GOOS) "$(TMPDIR)/$(SUBDIR)/docs/"
 	cp ./contrib/remote/containers.conf "$(TMPDIR)/$(SUBDIR)/"
-	$(MAKE) $(GOPLAT) $(_DSTARGS) SELINUXOPT="" install.remote-nobuild
+	$(MAKE) $(GOPLAT) $(_DSTARGS) SELINUXOPT="" install.remote
 	cd "$(TMPDIR)" && \
 		zip --recurse-paths "$(CURDIR)/$@" "./"
 	if [[ "$(GOARCH)" != "$(NATIVE_GOARCH)" ]]; then $(MAKE) clean-binaries; fi
@@ -685,7 +721,7 @@ podman-remote-release-%.zip: test/version/version ## Build podman-remote for %=$
 .PHONY: podman.msi
 podman.msi: test/version/version  ## Build podman-remote, package for installation on Windows
 	$(MAKE) podman-v$(RELEASE_NUMBER).msi
-podman-v$(RELEASE_NUMBER).msi: podman-remote-windows podman-remote-windows-docs
+podman-v$(RELEASE_NUMBER).msi: podman-remote-windows podman-remote-windows-docs podman-winpath win-sshproxy
 	$(eval DOCFILE := docs/build/remote/windows)
 	find $(DOCFILE) -print | \
 		wixl-heat --var var.ManSourceDir --component-group ManFiles \
@@ -694,12 +730,22 @@ podman-v$(RELEASE_NUMBER).msi: podman-remote-windows podman-remote-windows-docs
 	wixl -D VERSION=$(call err_if_empty,RELEASE_VERSION) -D ManSourceDir=$(DOCFILE) \
 		-o $@ contrib/msi/podman.wxs $(DOCFILE)/pages.wsx --arch x64
 
+# Checks out and builds win-sshproxy helper. See comment on GV_GITURL declaration
+.PHONY: win-sshproxy
+win-sshproxy: test/version/version
+	rm -rf tmp-gv; mkdir tmp-gv
+	(cd tmp-gv; \
+         git init; \
+         git remote add origin $(GV_GITURL); \
+         git fetch --depth 1 origin $(GV_SHA); \
+         git checkout FETCH_HEAD; make win-sshproxy)
+	mkdir -p bin/windows/
+	cp tmp-gv/bin/win-sshproxy.exe bin/windows/
+	rm -rf tmp-gv
+
 .PHONY: package
 package:  ## Build rpm packages
-	## TODO(ssbarnea): make version number predictable, it should not change
-	## on each execution, producing duplicates.
-	rm -rf build/* *.src.rpm ~/rpmbuild/RPMS/*
-	./contrib/build_rpm.sh
+	rpkg local
 
 ###
 ### Installation targets
@@ -721,8 +767,8 @@ install: .gopathok install.bin install.remote install.man install.systemd  ## In
 install.catatonit:
 	./hack/install_catatonit.sh
 
-.PHONY: install.remote-nobuild
-install.remote-nobuild:
+.PHONY: install.remote
+install.remote:
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(BINDIR)
 	install ${SELINUXOPT} -m 755 $(SRCBINDIR)/podman$(BINSFX) \
 		$(DESTDIR)$(BINDIR)/podman$(BINSFX)
@@ -730,11 +776,8 @@ install.remote-nobuild:
 		chcon --verbose --reference=$(DESTDIR)$(BINDIR)/podman-remote \
 		bin/podman-remote
 
-.PHONY: install.remote
-install.remote: podman-remote install.remote-nobuild
-
-.PHONY: install.bin-nobuild
-install.bin-nobuild:
+.PHONY: install.bin
+install.bin:
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(BINDIR)
 	install ${SELINUXOPT} -m 755 bin/podman $(DESTDIR)$(BINDIR)/podman
 	test -z "${SELINUXOPT}" || chcon --verbose --reference=$(DESTDIR)$(BINDIR)/podman bin/podman
@@ -744,19 +787,18 @@ install.bin-nobuild:
 	install ${SELINUXOPT} -m 755 -d ${DESTDIR}${TMPFILESDIR}
 	install ${SELINUXOPT} -m 644 contrib/tmpfile/podman.conf ${DESTDIR}${TMPFILESDIR}/podman.conf
 
-.PHONY: install.bin
-install.bin: podman rootlessport install.bin-nobuild
+.PHONY: install.modules-load
+install.modules-load: # This should only be used by distros which might use iptables-legacy, this is not needed on RHEL
+	install ${SELINUXOPT} -m 755 -d ${DESTDIR}${MODULESLOADDIR}
+	install ${SELINUXOPT} -m 644 contrib/modules-load.d/podman-iptables.conf ${DESTDIR}${MODULESLOADDIR}/podman-iptables.conf
 
-.PHONY: install.man-nobuild
-install.man-nobuild:
+.PHONY: install.man
+install.man:
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(MANDIR)/man1
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(MANDIR)/man5
 	install ${SELINUXOPT} -m 644 $(filter %.1,$(MANPAGES_DEST)) -t $(DESTDIR)$(MANDIR)/man1
 	install ${SELINUXOPT} -m 644 $(filter %.5,$(MANPAGES_DEST)) -t $(DESTDIR)$(MANDIR)/man5
 	install ${SELINUXOPT} -m 644 docs/source/markdown/links/*1 -t $(DESTDIR)$(MANDIR)/man1
-
-.PHONY: install.man
-install.man: docs install.man-nobuild
 
 .PHONY: install.completions
 install.completions:
@@ -778,15 +820,12 @@ install.docker:
 	install ${SELINUXOPT} -m 755 -d ${DESTDIR}${SYSTEMDDIR}  ${DESTDIR}${USERSYSTEMDDIR} ${DESTDIR}${TMPFILESDIR}
 	install ${SELINUXOPT} -m 644 contrib/systemd/system/podman-docker.conf -t ${DESTDIR}${TMPFILESDIR}
 
-.PHONY: install.docker-docs-nobuild
-install.docker-docs-nobuild:
+.PHONY: install.docker-docs
+install.docker-docs:
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(MANDIR)/man1
 	install ${SELINUXOPT} -m 644 docs/build/man/docker*.1 -t $(DESTDIR)$(MANDIR)/man1
 	install ${SELINUXOPT} -d -m 755 $(DESTDIR)$(MANDIR)/man5
 	install ${SELINUXOPT} -m 644 docs/build/man/docker*.5 -t $(DESTDIR)$(MANDIR)/man5
-
-.PHONY: install.docker-docs
-install.docker-docs: docker-docs install.docker-docs-nobuild
 
 .PHONY: install.docker-full
 install.docker-full: install.docker install.docker-docs
@@ -916,5 +955,5 @@ clean: clean-binaries ## Clean all make artifacts
 		libpod/pod_easyjson.go \
 		.install.goimports \
 		docs/build \
-		venv
+		.venv
 	make -C docs clean

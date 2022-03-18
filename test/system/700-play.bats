@@ -104,8 +104,6 @@ RELABEL="system_u:object_r:container_file_t:s0"
     TESTDIR=$PODMAN_TMPDIR/testdir
     mkdir -p $TESTDIR
     echo "$testYaml" | sed "s|TESTDIR|${TESTDIR}|g" > $PODMAN_TMPDIR/test.yaml
-    run_podman 125 play kube --network bridge $PODMAN_TMPDIR/test.yaml
-    is "$output" ".*invalid value passed to --network: bridge or host networking must be configured in YAML" "podman plan-network should fail with --network host"
     run_podman 125 play kube --network host $PODMAN_TMPDIR/test.yaml
     is "$output" ".*invalid value passed to --network: bridge or host networking must be configured in YAML" "podman plan-network should fail with --network host"
     run_podman play kube --network slirp4netns:port_handler=slirp4netns $PODMAN_TMPDIR/test.yaml
@@ -169,4 +167,69 @@ _EOF
     run_podman stop -a -t 0
     run_podman pod rm -t 0 -f test_pod
     run_podman rmi -f userimage:latest
+}
+
+@test "podman play --build --context-dir" {
+   skip_if_remote "--build is not supported in context remote"
+   testUserYaml="
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: test
+  name: test_pod
+spec:
+  containers:
+  - command:
+    - id
+    env:
+    - name: PATH
+      value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    - name: TERM
+      value: xterm
+    - name: container
+      value: podman
+    image: quay.io/libpod/userimage
+    name: test
+    resources: {}
+status: {}
+"
+
+mkdir -p $PODMAN_TMPDIR/userimage
+cat > $PODMAN_TMPDIR/userimage/Containerfile << _EOF
+from $IMAGE
+USER bin
+_EOF
+
+    echo "$testUserYaml" > $PODMAN_TMPDIR/test.yaml
+    run_podman 125 play kube --build --start=false $PODMAN_TMPDIR/test.yaml
+    run_podman play kube --replace --context-dir=$PODMAN_TMPDIR --build --start=false $PODMAN_TMPDIR/test.yaml
+    run_podman inspect --format "{{ .Config.User }}" test_pod-test
+    is "$output" bin "expect container within pod to run as the bin user"
+
+    run_podman stop -a -t 0
+    run_podman pod rm -t 0 -f test_pod
+    run_podman rmi -f userimage:latest
+
+    cd $PODMAN_TMPDIR
+    run_podman play kube --replace --build --start=false $PODMAN_TMPDIR/test.yaml
+    run_podman inspect --format "{{ .Config.User }}" test_pod-test
+    is "$output" bin "expect container within pod to run as the bin user"
+
+    run_podman stop -a -t 0
+    run_podman pod rm -t 0 -f test_pod
+    run_podman rmi -f userimage:latest
+}
+
+@test "podman play --annotation" {
+    TESTDIR=$PODMAN_TMPDIR/testdir
+    RANDOMSTRING=$(random_string 15)
+    mkdir -p $TESTDIR
+    echo "$testYaml" | sed "s|TESTDIR|${TESTDIR}|g" > $PODMAN_TMPDIR/test.yaml
+    run_podman play kube --annotation "name=$RANDOMSTRING" $PODMAN_TMPDIR/test.yaml
+    run_podman inspect --format "{{ .Config.Annotations }}" test_pod-test
+    is "$output" ".*name:$RANDOMSTRING" "Annotation should be added to pod"
+
+    run_podman stop -a -t 0
+    run_podman pod rm -t 0 -f test_pod
 }

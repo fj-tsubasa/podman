@@ -9,10 +9,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/systemd/define"
-	"github.com/containers/podman/v3/version"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/systemd/define"
+	"github.com/containers/podman/v4/version"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -83,10 +83,30 @@ type podInfo struct {
 	RunRoot string
 	// Add %i and %I to description and execute parts - this should not be used
 	IdentifySpecifier bool
+	// Wants are the list of services that this service is (weak) dependent on. This
+	// option does not influence the order in which services are started or stopped.
+	Wants []string
+	// After ordering dependencies between the list of services and this service.
+	After []string
+	// Similar to Wants, but declares a stronger requirement dependency.
+	Requires []string
 }
 
 const podTemplate = headerTemplate + `Requires={{{{- range $index, $value := .RequiredServices -}}}}{{{{if $index}}}} {{{{end}}}}{{{{ $value }}}}.service{{{{end}}}}
 Before={{{{- range $index, $value := .RequiredServices -}}}}{{{{if $index}}}} {{{{end}}}}{{{{ $value }}}}.service{{{{end}}}}
+{{{{- if or .Wants .After .Requires }}}}
+
+# User-defined dependencies
+{{{{- end}}}}
+{{{{- if .Wants}}}}
+Wants={{{{- range $index, $value := .Wants }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
+{{{{- end}}}}
+{{{{- if .After}}}}
+After={{{{- range $index, $value := .After }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
+{{{{- end}}}}
+{{{{- if .Requires}}}}
+Requires={{{{- range $index, $value := .Requires }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
+{{{{- end}}}}
 
 [Service]
 Environment={{{{.EnvVariable}}}}=%n
@@ -222,7 +242,8 @@ func generatePodInfo(pod *libpod.Pod, options entities.GenerateSystemdOptions) (
 		nameOrID = pod.Name()
 		ctrNameOrID = infraCtr.Name()
 	}
-	serviceName := fmt.Sprintf("%s%s%s", options.PodPrefix, options.Separator, nameOrID)
+
+	serviceName := getServiceName(options.PodPrefix, options.Separator, nameOrID)
 
 	info := podInfo{
 		ServiceName:       serviceName,

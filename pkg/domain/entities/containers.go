@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
+	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod/define"
-	nettypes "github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/containers/storage/pkg/archive"
 )
 
@@ -129,16 +129,12 @@ type RestartReport struct {
 
 type RmOptions struct {
 	All     bool
+	Depend  bool
 	Force   bool
 	Ignore  bool
 	Latest  bool
 	Timeout *uint
 	Volumes bool
-}
-
-type RmReport struct {
-	Err error
-	Id  string //nolint
 }
 
 type ContainerInspectReport struct {
@@ -158,6 +154,7 @@ type CommitOptions struct {
 	Message        string
 	Pause          bool
 	Quiet          bool
+	Squash         bool
 	Writer         io.Writer
 }
 
@@ -341,6 +338,7 @@ type ContainerRunOptions struct {
 	Rm           bool
 	SigProxy     bool
 	Spec         *specgen.SpecGenerator
+	Passwd       bool
 }
 
 // ContainerRunReport describes the results of running
@@ -465,4 +463,14 @@ type ContainerStatsReport struct {
 type ContainerRenameOptions struct {
 	// NewName is the new name that will be given to the container.
 	NewName string
+}
+
+// ContainerCloneOptions contains options for cloning an existing continer
+type ContainerCloneOptions struct {
+	ID           string
+	Destroy      bool
+	CreateOpts   ContainerCreateOptions
+	Image        string
+	RawImageName string
+	Run          bool
 }

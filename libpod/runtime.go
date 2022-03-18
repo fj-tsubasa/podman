@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -19,24 +18,23 @@ import (
 
 	"github.com/containers/buildah/pkg/parse"
 	"github.com/containers/common/libimage"
+	"github.com/containers/common/libnetwork/network"
+	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/cgroups"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/common/pkg/secrets"
 	"github.com/containers/image/v5/pkg/sysregistriesv2"
 	is "github.com/containers/image/v5/storage"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/events"
-	"github.com/containers/podman/v3/libpod/lock"
-	"github.com/containers/podman/v3/libpod/network/cni"
-	"github.com/containers/podman/v3/libpod/network/netavark"
-	nettypes "github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/libpod/plugin"
-	"github.com/containers/podman/v3/libpod/shutdown"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/systemd"
-	"github.com/containers/podman/v3/pkg/util"
-	"github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/events"
+	"github.com/containers/podman/v4/libpod/lock"
+	"github.com/containers/podman/v4/libpod/plugin"
+	"github.com/containers/podman/v4/libpod/shutdown"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/systemd"
+	"github.com/containers/podman/v4/pkg/util"
+	"github.com/containers/podman/v4/utils"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/docker/docker/pkg/namesgenerator"
@@ -110,7 +108,6 @@ type Runtime struct {
 	// and remains true until the runtime is shut down (rendering its
 	// storage unusable). When valid is false, the runtime cannot be used.
 	valid bool
-	lock  sync.RWMutex
 
 	// mechanism to read and write even logs
 	eventer events.Eventer
@@ -170,7 +167,6 @@ func NewRuntime(ctx context.Context, options ...RuntimeOption) (*Runtime, error)
 	if err != nil {
 		return nil, err
 	}
-	conf.CheckCgroupsAndAdjustConfig()
 	return newRuntimeFromConfig(ctx, conf, options...)
 }
 
@@ -214,6 +210,10 @@ func newRuntimeFromConfig(ctx context.Context, conf *config.Config, options ...R
 	}
 
 	if err := shutdown.Register("libpod", func(sig os.Signal) error {
+		// For `systemctl stop podman.service` support, exit code should be 0
+		if sig == syscall.SIGTERM {
+			os.Exit(0)
+		}
 		os.Exit(1)
 		return nil
 	}); err != nil && errors.Cause(err) != shutdown.ErrHandlerExists {
@@ -227,6 +227,8 @@ func newRuntimeFromConfig(ctx context.Context, conf *config.Config, options ...R
 	if err := makeRuntime(ctx, runtime); err != nil {
 		return nil, err
 	}
+
+	runtime.config.CheckCgroupsAndAdjustConfig()
 
 	return runtime, nil
 }
@@ -489,49 +491,15 @@ func makeRuntime(ctx context.Context, runtime *Runtime) (retErr error) {
 		}
 	}
 
-	var netInterface nettypes.ContainerNetwork
-
-	switch runtime.config.Network.NetworkBackend {
-	case "", "cni":
-		netInterface, err = cni.NewCNINetworkInterface(cni.InitConfig{
-			CNIConfigDir:   runtime.config.Network.NetworkConfigDir,
-			CNIPluginDirs:  runtime.config.Network.CNIPluginDirs,
-			DefaultNetwork: runtime.config.Network.DefaultNetwork,
-			DefaultSubnet:  runtime.config.Network.DefaultSubnet,
-			IsMachine:      runtime.config.Engine.MachineEnabled,
-			LockFile:       filepath.Join(runtime.config.Network.NetworkConfigDir, "cni.lock"),
-		})
-		if err != nil {
-			return errors.Wrapf(err, "could not create network interface")
-		}
-		if runtime.config.Network.NetworkBackend == "" {
-			// set backend to cni so that podman info can display it
-			runtime.config.Network.NetworkBackend = "cni"
-		}
-
-	case "netavark":
-		netavarkBin, err := runtime.config.FindHelperBinary("netavark", false)
+	// the store is only setup when we are in the userns so we do the same for the network interface
+	if !needsUserns {
+		netBackend, netInterface, err := network.NetworkBackend(runtime.store, runtime.config, runtime.syslog)
 		if err != nil {
 			return err
 		}
-
-		netInterface, err = netavark.NewNetworkInterface(netavark.InitConfig{
-			NetavarkBinary:   netavarkBin,
-			NetworkConfigDir: filepath.Join(runtime.config.Engine.StaticDir, "networks"),
-			DefaultNetwork:   runtime.config.Network.DefaultNetwork,
-			DefaultSubnet:    runtime.config.Network.DefaultSubnet,
-			IsMachine:        runtime.config.Engine.MachineEnabled,
-			LockFile:         filepath.Join(runtime.config.Network.NetworkConfigDir, "netavark.lock"),
-			Syslog:           runtime.syslog,
-		})
-		if err != nil {
-			return errors.Wrapf(err, "could not create network interface")
-		}
-	default:
-		return errors.Errorf("unsupported network backend %q, check network_backend in containers.conf", runtime.config.Network.NetworkBackend)
+		runtime.config.Network.NetworkBackend = string(netBackend)
+		runtime.network = netInterface
 	}
-
-	runtime.network = netInterface
 
 	// We now need to see if the system has restarted
 	// We check for the presence of a file in our tmp directory to verify this
@@ -747,9 +715,6 @@ func (r *Runtime) TmpDir() (string, error) {
 // Note that the returned value is not a copy and must hence
 // only be used in a reading fashion.
 func (r *Runtime) GetConfigNoCopy() (*config.Config, error) {
-	r.lock.RLock()
-	defer r.lock.RUnlock()
-
 	if !r.valid {
 		return nil, define.ErrRuntimeStopped
 	}
@@ -844,9 +809,6 @@ func (r *Runtime) DeferredShutdown(force bool) {
 // cleaning up; if force is false, an error will be returned if there are
 // still containers running or mounted
 func (r *Runtime) Shutdown(force bool) error {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
 	if !r.valid {
 		return define.ErrRuntimeStopped
 	}
@@ -1050,9 +1012,6 @@ func (r *Runtime) RunRoot() string {
 // If the given ID does not correspond to any existing Pod or Container,
 // ErrNoSuchCtr is returned.
 func (r *Runtime) GetName(id string) (string, error) {
-	r.lock.RLock()
-	defer r.lock.RUnlock()
-
 	if !r.valid {
 		return "", define.ErrRuntimeStopped
 	}
@@ -1113,7 +1072,9 @@ func (r *Runtime) mergeDBConfig(dbConfig *DBConfig) {
 			logrus.Debugf("Overriding tmp dir %q with %q from database", c.TmpDir, dbConfig.LibpodTmp)
 		}
 		c.TmpDir = dbConfig.LibpodTmp
-		c.EventsLogFilePath = filepath.Join(dbConfig.LibpodTmp, "events", "events.log")
+		if c.EventsLogFilePath == "" {
+			c.EventsLogFilePath = filepath.Join(dbConfig.LibpodTmp, "events", "events.log")
+		}
 	}
 
 	if !r.storageSet.VolumePathSet && dbConfig.VolumePath != "" {

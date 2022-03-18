@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -166,11 +166,13 @@ var _ = Describe("Podman volume plugins", func() {
 		create.WaitWithDefaultTimeout()
 		Expect(create).Should(Exit(0))
 
-		ctr1 := podmanTest.Podman([]string{"run", "--security-opt", "label=disable", "-v", fmt.Sprintf("%v:/test", volName), ALPINE, "sh", "-c", "touch /test/testfile && echo helloworld > /test/testfile"})
+		ctr1Name := "ctr1"
+		ctr1 := podmanTest.Podman([]string{"run", "--security-opt", "label=disable", "--name", ctr1Name, "-v", fmt.Sprintf("%v:/test", volName), ALPINE, "sh", "-c", "touch /test/testfile && echo helloworld > /test/testfile"})
 		ctr1.WaitWithDefaultTimeout()
 		Expect(ctr1).Should(Exit(0))
 
-		ctr2 := podmanTest.Podman([]string{"run", "--security-opt", "label=disable", "-v", fmt.Sprintf("%v:/test", volName), ALPINE, "cat", "/test/testfile"})
+		ctr2Name := "ctr2"
+		ctr2 := podmanTest.Podman([]string{"run", "--security-opt", "label=disable", "--name", ctr2Name, "-v", fmt.Sprintf("%v:/test", volName), ALPINE, "cat", "/test/testfile"})
 		ctr2.WaitWithDefaultTimeout()
 		Expect(ctr2).Should(Exit(0))
 		Expect(ctr2.OutputToString()).To(ContainSubstring("helloworld"))
@@ -178,7 +180,7 @@ var _ = Describe("Podman volume plugins", func() {
 		// HACK: `volume rm -f` is timing out trying to remove containers using the volume.
 		// Solution: remove them manually...
 		// TODO: fix this when I get back
-		rmAll := podmanTest.Podman([]string{"rm", "-af"})
+		rmAll := podmanTest.Podman([]string{"rm", "-f", ctr2Name, ctr1Name})
 		rmAll.WaitWithDefaultTimeout()
 		Expect(rmAll).Should(Exit(0))
 	})

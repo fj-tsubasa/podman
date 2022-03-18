@@ -7,7 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -94,7 +94,7 @@ var _ = Describe("Podman cp", func() {
 
 	// Copy a file to the container, then back to the host in --pid=host
 	It("podman cp --pid=host file", func() {
-		SkipIfRootlessCgroupsV1("Not supported for rootless + CGroupsV1")
+		SkipIfRootlessCgroupsV1("Not supported for rootless + CgroupsV1")
 		srcFile, err := ioutil.TempFile("", "")
 		Expect(err).To(BeNil())
 		defer srcFile.Close()

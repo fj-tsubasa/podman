@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/ps/define"
+	"github.com/containers/common/libnetwork/types"
+	"github.com/containers/podman/v4/pkg/ps/define"
 	"github.com/pkg/errors"
 )
 

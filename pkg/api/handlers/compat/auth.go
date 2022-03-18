@@ -9,10 +9,10 @@ import (
 
 	DockerClient "github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	docker "github.com/docker/docker/api/types"
 	"github.com/pkg/errors"
 )
@@ -28,7 +28,7 @@ func Auth(w http.ResponseWriter, r *http.Request) {
 	var authConfig docker.AuthConfig
 	err := json.NewDecoder(r.Body).Decode(&authConfig)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to parse request"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to parse request"))
 		return
 	}
 

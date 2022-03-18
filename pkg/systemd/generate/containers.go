@@ -9,11 +9,11 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	libpodDefine "github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/systemd/define"
-	"github.com/containers/podman/v3/version"
+	"github.com/containers/podman/v4/libpod"
+	libpodDefine "github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/systemd/define"
+	"github.com/containers/podman/v4/version"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
@@ -94,12 +94,32 @@ type containerInfo struct {
 	RunRoot string
 	// Add %i and %I to description and execute parts
 	IdentifySpecifier bool
+	// Wants are the list of services that this service is (weak) dependent on. This
+	// option does not influence the order in which services are started or stopped.
+	Wants []string
+	// After ordering dependencies between the list of services and this service.
+	After []string
+	// Similar to Wants, but declares a stronger requirement dependency.
+	Requires []string
 }
 
 const containerTemplate = headerTemplate + `
 {{{{- if .BoundToServices}}}}
 BindsTo={{{{- range $index, $value := .BoundToServices -}}}}{{{{if $index}}}} {{{{end}}}}{{{{ $value }}}}.service{{{{end}}}}
 After={{{{- range $index, $value := .BoundToServices -}}}}{{{{if $index}}}} {{{{end}}}}{{{{ $value }}}}.service{{{{end}}}}
+{{{{- end}}}}
+{{{{- if or .Wants .After .Requires }}}}
+
+# User-defined dependencies
+{{{{- end}}}}
+{{{{- if .Wants}}}}
+Wants={{{{- range $index, $value := .Wants }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
+{{{{- end}}}}
+{{{{- if .After}}}}
+After={{{{- range $index, $value := .After }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
+{{{{- end}}}}
+{{{{- if .Requires}}}}
+Requires={{{{- range $index, $value := .Requires }}}}{{{{ if $index}}}} {{{{end}}}}{{{{ $value }}}}{{{{end}}}}
 {{{{- end}}}}
 
 [Service]
@@ -201,6 +221,9 @@ func generateContainerInfo(ctr *libpod.Container, options entities.GenerateSyste
 		CreateCommand:     createCommand,
 		RunRoot:           runRoot,
 		containerEnv:      envs,
+		Wants:             options.Wants,
+		After:             options.After,
+		Requires:          options.Requires,
 	}
 
 	return &info, nil
@@ -213,7 +236,9 @@ func containerServiceName(ctr *libpod.Container, options entities.GenerateSystem
 	if options.Name {
 		nameOrID = ctr.Name()
 	}
-	serviceName := fmt.Sprintf("%s%s%s", options.ContainerPrefix, options.Separator, nameOrID)
+
+	serviceName := getServiceName(options.ContainerPrefix, options.Separator, nameOrID)
+
 	return nameOrID, serviceName
 }
 

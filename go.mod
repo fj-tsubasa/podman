@@ -1,40 +1,41 @@
-module github.com/containers/podman/v3
+module github.com/containers/podman/v4
 
 go 1.16
 
 require (
-	github.com/BurntSushi/toml v0.4.1
+	github.com/BurntSushi/toml v1.0.0
 	github.com/blang/semver v3.5.1+incompatible
-	github.com/buger/goterm v0.0.0-20181115115552-c206103e1f37
-	github.com/checkpoint-restore/checkpointctl v0.0.0-20210922093614-c31748bec9f2
-	github.com/checkpoint-restore/go-criu/v5 v5.2.0
-	github.com/container-orchestrated-devices/container-device-interface v0.0.0-20210325223243-f99e8b6c10b9
+	github.com/buger/goterm v1.0.4
+	github.com/checkpoint-restore/checkpointctl v0.0.0-20211204171957-54b4ebfdb681
+	github.com/checkpoint-restore/go-criu/v5 v5.3.0
+	github.com/container-orchestrated-devices/container-device-interface v0.3.0
 	github.com/containernetworking/cni v1.0.1
-	github.com/containernetworking/plugins v1.0.1
-	github.com/containers/buildah v1.23.1
-	github.com/containers/common v0.46.1-0.20211205182721-515a2805e7b9
+	github.com/containernetworking/plugins v1.1.1
+	github.com/containers/buildah v1.24.3-0.20220310160415-5ec70bf01ea5
+	github.com/containers/common v0.47.5-0.20220228211119-9880eb424fde
 	github.com/containers/conmon v2.0.20+incompatible
-	github.com/containers/image/v5 v5.17.1-0.20211207161909-6f3c8453e1a7
+	github.com/containers/image/v5 v5.20.1-0.20220310094651-0d8056ee346f
 	github.com/containers/ocicrypt v1.1.2
-	github.com/containers/psgo v1.7.1
-	github.com/containers/storage v1.37.1-0.20211130181259-1a158c89a518
+	github.com/containers/psgo v1.7.2
+	github.com/containers/storage v1.38.3-0.20220308085612-93ce26691863
 	github.com/coreos/go-systemd/v22 v22.3.2
 	github.com/coreos/stream-metadata-go v0.0.0-20210225230131-70edb9eb47b3
 	github.com/cyphar/filepath-securejoin v0.2.3
 	github.com/davecgh/go-spew v1.1.1
-	github.com/digitalocean/go-qemu v0.0.0-20210209191958-152a1535e49f
-	github.com/docker/distribution v2.7.1+incompatible
-	github.com/docker/docker v20.10.11+incompatible
-	github.com/docker/go-connections v0.4.0
-	github.com/docker/go-plugins-helpers v0.0.0-20200102110956-c9a8a2d92ccc
+	github.com/digitalocean/go-qemu v0.0.0-20210326154740-ac9e0b687001
+	github.com/docker/distribution v2.8.1+incompatible
+	github.com/docker/docker v20.10.13+incompatible
+	github.com/docker/go-connections v0.4.1-0.20210727194412-58542c764a11
+	github.com/docker/go-plugins-helpers v0.0.0-20211224144127-6eecb7beb651
 	github.com/docker/go-units v0.4.0
 	github.com/dtylman/scp v0.0.0-20181017070807-f3000a34aef4
 	github.com/fsnotify/fsnotify v1.5.1
 	github.com/ghodss/yaml v1.0.0
-	github.com/godbus/dbus/v5 v5.0.6
-	github.com/google/shlex v0.0.0-20181106134648-c34317bd91bf
+	github.com/godbus/dbus/v5 v5.1.0
+	github.com/google/gofuzz v1.2.0
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.3.0
-	github.com/gorilla/handlers v0.0.0-20150720190736-60c7bfde3e33
+	github.com/gorilla/handlers v1.5.1
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/schema v1.2.0
 	github.com/hashicorp/go-multierror v1.1.1
@@ -44,32 +45,33 @@ require (
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
 	github.com/mrunalp/fileutils v0.5.0
 	github.com/onsi/ginkgo v1.16.5
-	github.com/onsi/gomega v1.17.0
+	github.com/onsi/gomega v1.18.1
 	github.com/opencontainers/go-digest v1.0.0
-	github.com/opencontainers/image-spec v1.0.2-0.20211123152302-43a7dee1ec31
-	github.com/opencontainers/runc v1.0.3
-	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
-	github.com/opencontainers/runtime-tools v0.9.1-0.20211020193359-09d837bf40a7
+	github.com/opencontainers/image-spec v1.0.3-0.20220114050600-8b9d41f48198
+	github.com/opencontainers/runc v1.1.0
+	github.com/opencontainers/runtime-spec v1.0.3-0.20211214071223-8958f93039ab
+	github.com/opencontainers/runtime-tools v0.9.1-0.20220110225228-7e2d60f1e41f
 	github.com/opencontainers/selinux v1.10.0
 	github.com/pkg/errors v0.9.1
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/rootless-containers/rootlesskit v0.14.6
 	github.com/sirupsen/logrus v1.8.1
-	github.com/spf13/cobra v1.2.1
+	github.com/spf13/cobra v1.4.0
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.7.0
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
-	github.com/vbauerster/mpb/v6 v6.0.4
-	github.com/vishvananda/netlink v1.1.1-0.20210330154013-f5de75959ad5
+	github.com/ulikunitz/xz v0.5.10
+	github.com/vbauerster/mpb/v7 v7.4.1
+	github.com/vishvananda/netlink v1.1.1-0.20220115184804-dd687eb2f2d4
 	go.etcd.io/bbolt v1.3.6
-	golang.org/x/crypto v0.0.0-20210711020723-a769d52b0f97
+	golang.org/x/crypto v0.0.0-20220112180741-5e0467b6c7ce
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20211124211545-fe61309f8881
-	gopkg.in/fsnotify.v1 v1.4.7 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
-	k8s.io/api v0.22.4
-	k8s.io/apimachinery v0.22.4
+	golang.org/x/sys v0.0.0-20220227234510-4e6760a101f9
+	golang.org/x/text v0.3.7
+	google.golang.org/protobuf v1.27.1
+	gopkg.in/inf.v0 v0.9.1
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 replace github.com/onsi/gomega => github.com/onsi/gomega v1.16.0

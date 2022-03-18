@@ -88,12 +88,10 @@ EOF
     containerfile=$PODMAN_TMPDIR/Containerfile
     cat >$containerfile <<EOF
 FROM $IMAGE
-RUN apk add nginx
 RUN echo $rand_content > /$rand_filename
 EOF
 
-    # The 'apk' command can take a long time to fetch files; bump timeout
-    PODMAN_TIMEOUT=240 run_podman build -t build_test -f - --format=docker $tmpdir < $containerfile
+    run_podman build -t build_test -f - --format=docker $tmpdir < $containerfile
     is "$output" ".*COMMIT" "COMMIT seen in log"
 
     run_podman run --rm build_test cat /$rand_filename
@@ -115,7 +113,7 @@ FROM $IMAGE
 RUN echo $rand_content
 EOF
 
-    run_podman 125 --runtime-flag invalidflag build -t build_test $tmpdir
+    run_podman 1 --runtime-flag invalidflag build -t build_test $tmpdir
     is "$output" ".*invalidflag" "failed when passing undefined flags to the runtime"
 }
 
@@ -188,13 +186,61 @@ EOF
     run_podman rmi -f build_test $iid
 }
 
+@test "podman build test -f ./relative" {
+    rand_filename=$(random_string 20)
+    rand_content=$(random_string 50)
+
+    tmpdir=$PODMAN_TMPDIR/build-test
+    mkdir -p $tmpdir
+    mkdir -p $PODMAN_TMPDIR/reldir
+
+    containerfile=$PODMAN_TMPDIR/reldir/Containerfile
+    cat >$containerfile <<EOF
+FROM $IMAGE
+RUN echo $rand_content > /$rand_filename
+EOF
+
+    cd $PODMAN_TMPDIR
+    run_podman build -t build_test -f ./reldir/Containerfile --format=docker $tmpdir
+    is "$output" ".*COMMIT" "COMMIT seen in log"
+
+    run_podman run --rm build_test cat /$rand_filename
+    is "$output"   "$rand_content"   "reading generated file in image"
+
+    run_podman rmi -f build_test
+}
+
+@test "podman parallel build should not race" {
+    skip_if_remote "following test is not supported for remote clients"
+
+    # Run thirty parallel builds using the same Containerfile
+    cat >$PODMAN_TMPDIR/Containerfile <<EOF
+FROM $IMAGE
+RUN echo hi
+EOF
+
+    local count=30
+    for i in $(seq --format '%02g' 1 $count); do
+        timeout --foreground -v --kill=10 60 \
+                $PODMAN build -t i$i $PODMAN_TMPDIR &>/dev/null &
+    done
+
+    # Wait for all background builds to complete. Note that this succeeds
+    # even if some of the individual builds fail! Our actual test is below.
+    wait
+
+    # Now delete all built images. If any image wasn't built, rmi will fail
+    # and test will fail.
+    run_podman rmi $(seq --format 'i%02g' 1 $count)
+}
+
 @test "podman build - URLs" {
     tmpdir=$PODMAN_TMPDIR/build-test
     mkdir -p $tmpdir
 
     cat >$tmpdir/Dockerfile <<EOF
 FROM $IMAGE
-ADD https://github.com/containers/podman/blob/master/README.md /tmp/
+ADD https://github.com/containers/podman/blob/main/README.md /tmp/
 EOF
     run_podman build -t add_url $tmpdir
     run_podman run --rm add_url stat /tmp/README.md
@@ -559,7 +605,7 @@ EOF
     done
 }
 
-# Regression test for #9867
+# Regression test for #9867 and #13529
 # Make sure that if you exclude everything in context dir, that
 # the Containerfile/Dockerfile in the context dir are used
 @test "podman build with ignore '*'" {
@@ -573,6 +619,15 @@ EOF
 cat >$tmpdir/.dockerignore <<EOF
 *
 EOF
+
+    # Prior to the fix for #13529, pod-create would fail with 'error building
+    # at STEP COPY .../catatonit' because of the local .dockerignore file was
+    # used.
+    pushd "${tmpdir}"
+    run_podman pod create
+    run_podman pod rm $output
+    run_podman rmi $(pause_image)
+    popd
 
     run_podman build -t build_test $tmpdir
 
@@ -992,6 +1047,27 @@ EOF
     echo FROM $IMAGE > $tmpdir/link/Dockerfile
     echo RUN echo hello >> $tmpdir/link/Dockerfile
     run_podman build -t build_test $tmpdir/link
+}
+
+@test "podman build --volumes-from conflict" {
+    rand_content=$(random_string 50)
+
+    tmpdir=$PODMAN_TMPDIR/build-test
+    mkdir -p $tmpdir
+    dockerfile=$tmpdir/Dockerfile
+    cat >$dockerfile <<EOF
+FROM $IMAGE
+VOLUME /vol
+EOF
+
+    run_podman build -t build_test $tmpdir
+    is "$output" ".*COMMIT" "COMMIT seen in log"
+
+    run_podman run -d --name test_ctr build_test  top
+    run_podman run --rm --volumes-from test_ctr $IMAGE  echo $rand_content
+    is "$output"   "$rand_content"   "No error should be thrown about volume in use"
+
+    run_podman rmi -f build_test
 }
 
 function teardown() {

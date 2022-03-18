@@ -18,7 +18,15 @@ podman rm -a -f &>/dev/null
 
 t GET "libpod/containers/json (at start: clean slate)" 200 length=0
 
-podman run $IMAGE true
+# Regression test for #12904 (race condition in logging code)
+mytext="hi-there-$(random_string 15)"
+podman run --rm -d --replace --name foo $IMAGE sh -c "echo $mytext;sleep 42"
+# Logs output is prepended by ^A^X
+t POST "containers/foo/attach?logs=true&stream=false" 200 \
+  $'\001\030'$mytext
+t POST "containers/foo/kill" 204
+
+podman run -v /tmp:/tmp $IMAGE true
 
 t GET libpod/containers/json 200 length=0
 
@@ -33,6 +41,7 @@ t GET libpod/containers/json?all=true 200 \
   .[0].Command[0]="true" \
   .[0].State~\\\(exited\\\|stopped\\\) \
   .[0].ExitCode=0 \
+  .[0].Mounts~.*/tmp \
   .[0].IsInfra=false
 
 # Test compat API for Network Settings (.Network is N/A when rootless)
@@ -44,7 +53,12 @@ t GET /containers/json?all=true 200 \
   length=1 \
   .[0].Id~[0-9a-f]\\{64\\} \
   .[0].Image=$IMAGE \
+  .[0].Mounts~.*/tmp \
   $network_expect
+
+# compat API imageid with sha256: prefix
+t GET containers/json?limit=1 200 \
+  .[0].ImageID~sha256:[0-9a-f]\\{64\\}
 
 # Make sure `limit` works.
 t GET libpod/containers/json?limit=1 200 \
@@ -79,7 +93,7 @@ else
     fi
 fi
 
-t DELETE libpod/containers/$cid 204
+t DELETE libpod/containers/$cid 200 .[0].Id=$cid
 
 # Issue #6799: it should be possible to start a container, even w/o args.
 t POST libpod/containers/create?name=test_noargs Image=${IMAGE} 201 \
@@ -94,10 +108,10 @@ t GET    libpod/containers/${cid}/json 200 \
   .State.Status~\\\(exited\\\|stopped\\\) \
   .State.Running=false \
   .State.ExitCode=0
-t DELETE libpod/containers/$cid 204
+t DELETE libpod/containers/$cid 200 .[0].Id=$cid
 
 CNAME=myfoo
-podman run --name $CNAME $IMAGE -td top
+podman run -d --name $CNAME $IMAGE top
 t GET libpod/containers/json?all=true 200 \
   .[0].Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.[0].Id' <<<"$output")
@@ -150,7 +164,7 @@ podman create -t -i --name myctr $IMAGE ls
 # Check configuration before initializing
 t GET libpod/containers/myctr/json 200 \
   .Id~[0-9a-f]\\{64\\} \
-  .State.Status="configured" \
+  .State.Status="created" \
   .State.Pid=0 \
   .ResolvConfPath="" \
   .HostnamePath="" \
@@ -166,12 +180,12 @@ t POST libpod/containers/myctr/init 204
 # Check configuration after initializing
 t GET libpod/containers/myctr/json 200 \
   .Id~[0-9a-f]\\{64\\} \
-  .State.Status="created" \
+  .State.Status="initialized" \
   .State.Pid~[0-9]\\{1\,8\\} \
   .ResolvConfPath=$userdata_path/resolv.conf \
   .HostnamePath=$userdata_path/hostname \
   .HostsPath=$userdata_path/hosts \
-  .NetworkSettings.SandboxKey~.*/netns/cni- \
+  .NetworkSettings.SandboxKey~.*/netns/netns- \
   .OCIConfigPath~.*config\.json \
   .GraphDriver.Data.MergedDir~.*merged
 
@@ -184,8 +198,8 @@ t GET containers/myctr/json 200 \
 t DELETE images/localhost/newrepo:latest?force=true 200
 t DELETE images/localhost/newrepo:v1?force=true 200
 t DELETE images/localhost/newrepo:v2?force=true 200
-t DELETE libpod/containers/$cid 204
-t DELETE libpod/containers/myctr 204
+t DELETE libpod/containers/$cid?force=true 200 .[0].Id=$cid
+t DELETE libpod/containers/myctr 200
 t DELETE libpod/containers/bogus 404
 
 
@@ -225,11 +239,16 @@ t GET containers/$cid/json 200 \
 t POST containers/create Image=$IMAGE Entrypoint='["top"]' 201 \
   .Id~[0-9a-f]\\{64\\}
 cid_top=$(jq -r '.Id' <<<"$output")
+# .Network is N/A when rootless
+network_expect=
+if root; then
+    network_expect='.NetworkSettings.Networks.podman.NetworkID=podman'
+fi
 t GET containers/${cid_top}/json 200 \
   .Config.Entrypoint[0]="top" \
   .Config.Cmd='[]' \
   .Path="top" \
-  .NetworkSettings.Networks.podman.NetworkID=podman
+  $network_expect
 t POST  containers/${cid_top}/start 204
 # make sure the container is running
 t GET containers/${cid_top}/json 200 \
@@ -261,7 +280,7 @@ t DELETE containers/$cid_top 204
 t POST containers/create \
   Image=$ENV_WORKDIR_IMG \
   WorkingDir=/dataDir \
-  StopSignal=9 \
+  StopSignal=\"9\" \
   201 \
   .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
@@ -353,11 +372,15 @@ t GET containers/$cid/json 200 \
 t DELETE containers/$cid?v=true 204
 
 # Test Compat Create with default network mode (#10569)
+networkmode=slirp4netns
+if root; then
+    networkmode=bridge
+fi
 t POST containers/create Image=$IMAGE HostConfig='{"NetworkMode":"default"}' 201 \
   .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
 t GET containers/$cid/json 200 \
-  .HostConfig.NetworkMode="bridge"
+  .HostConfig.NetworkMode="$networkmode"
 
 t DELETE containers/$cid?v=true 204
 
@@ -371,7 +394,8 @@ t GET containers/$cid/json 200 \
   .Config.Healthcheck.Retries=3
 
 # compat api: Test for mount options support
-payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch","TmpfsOptions":{"SizeBytes":1024,"Mode":755}}]}'
+# Sigh, JSON can't handle octal. 0755(octal) = 493(decimal)
+payload='{"Mounts":[{"Type":"tmpfs","Target":"/mnt/scratch","TmpfsOptions":{"SizeBytes":1024,"Mode":493}}]}'
 t POST containers/create Image=$IMAGE HostConfig="$payload" 201 .Id~[0-9a-f]\\{64\\}
 cid=$(jq -r '.Id' <<<"$output")
 t GET containers/$cid/json 200 \
@@ -397,3 +421,29 @@ t GET containers/$cid/json 200 \
     .HostConfig.Binds[0]~/tmp:/mnt:.* \
 
 t DELETE containers/$cid?v=true 204
+
+# test apiv2 create/commit
+t POST containers/create \
+  Image=$IMAGE \
+  Entrypoint='["echo"]' \
+  Cmd='["param1","param2"]' \
+  201 \
+  .Id~[0-9a-f]\\{64\\}
+cid=$(jq -r '.Id' <<<"$output")
+
+# No such container
+t POST "commit?container=nonesuch" 404
+
+cparam="repo=newrepo&tag=v3&comment=abcd&author=eric"
+cparam="$cparam&format=docker&changes=CMD%20/bin/bar%0aEXPOSE%209090"
+t POST "commit?container=${cid:0:12}&$cparam" 201 \
+  .Id~[0-9a-f]\\{64\\}
+iid=$(jq -r '.Id' <<<"$output")
+t GET images/$iid/json 200 \
+  .RepoTags[0]=docker.io/library/newrepo:v3 \
+  .Config.ExposedPorts~.*"9090/tcp" \
+  .Config.Cmd~.*"/bin/bar" \
+  .Comment="abcd"
+
+t DELETE containers/$cid 204
+t DELETE images/docker.io/library/newrepo:v3?force=false 200

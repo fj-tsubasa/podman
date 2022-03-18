@@ -8,11 +8,11 @@ import (
 
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	systemDefine "github.com/containers/podman/v3/pkg/systemd/define"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	systemDefine "github.com/containers/podman/v4/pkg/systemd/define"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -25,6 +25,9 @@ const (
 	restartPolicyFlagName     = "restart-policy"
 	restartSecFlagName        = "restart-sec"
 	newFlagName               = "new"
+	wantsFlagName             = "wants"
+	afterFlagName             = "after"
+	requiresFlagName          = "requires"
 )
 
 var (
@@ -96,6 +99,15 @@ func init() {
 	formatFlagName := "format"
 	flags.StringVar(&format, formatFlagName, "", "Print the created units in specified format (json)")
 	_ = systemdCmd.RegisterFlagCompletionFunc(formatFlagName, common.AutocompleteFormat(nil))
+
+	flags.StringArrayVar(&systemdOptions.Wants, wantsFlagName, nil, "Add (weak) requirement dependencies to the generated unit file")
+	_ = systemdCmd.RegisterFlagCompletionFunc(wantsFlagName, completion.AutocompleteNone)
+
+	flags.StringArrayVar(&systemdOptions.After, afterFlagName, nil, "Add dependencies order to the generated unit file")
+	_ = systemdCmd.RegisterFlagCompletionFunc(afterFlagName, completion.AutocompleteNone)
+
+	flags.StringArrayVar(&systemdOptions.Requires, requiresFlagName, nil, "Similar to wants, but declares stronger requirement dependencies")
+	_ = systemdCmd.RegisterFlagCompletionFunc(requiresFlagName, completion.AutocompleteNone)
 
 	flags.SetNormalizeFunc(utils.TimeoutAliasFlags)
 }

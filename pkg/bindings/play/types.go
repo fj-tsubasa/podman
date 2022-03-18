@@ -7,6 +7,8 @@ import (
 //go:generate go run ../generator/generator.go KubeOptions
 // KubeOptions are optional options for replaying kube YAML files
 type KubeOptions struct {
+	// Annotations - Annotations to add to Pods
+	Annotations map[string]string
 	// Authfile - path to an authentication file.
 	Authfile *string
 	// CertDir - to a directory containing TLS certifications and keys.
@@ -15,8 +17,8 @@ type KubeOptions struct {
 	Username *string
 	// Password for authenticating against the registry.
 	Password *string
-	// Network - name of the CNI network to connect to.
-	Network *string
+	// Network - name of the networks to connect to.
+	Network *[]string
 	// NoHosts - do not generate /etc/hosts file in pod's containers
 	NoHosts *bool
 	// Quiet - suppress output when pulling images.

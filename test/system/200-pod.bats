@@ -6,13 +6,7 @@ load helpers
 function teardown() {
     run_podman pod rm -f -t 0 -a
     run_podman rm -f -t 0 -a
-    run_podman image list --format '{{.ID}} {{.Repository}}'
-    while read id name; do
-        if [[ "$name" =~ /podman-pause ]]; then
-            run_podman rmi $id
-        fi
-    done <<<"$output"
-
+    run_podman ? rmi $(pause_image)
     basic_teardown
 }
 
@@ -29,8 +23,7 @@ function teardown() {
 }
 
 @test "podman pod top - containers in different PID namespaces" {
-    # With infra=false, we don't get a /pause container (we also
-    # don't pull k8s.gcr.io/pause )
+    # With infra=false, we don't get a /pause container
     no_infra='--infra=false'
     run_podman pod create $no_infra
     podid="$output"
@@ -57,13 +50,14 @@ function teardown() {
     fi
 
     # Clean up
-    run_podman pod rm -f -t 0 $podid
+    run_podman --noout pod rm -f -t 0 $podid
+    is "$output" "" "output should be empty"
 }
 
 
 @test "podman pod create - custom infra image" {
+    skip_if_remote "CONTAINERS_CONF only effects server side"
     image="i.do/not/exist:image"
-
     tmpdir=$PODMAN_TMPDIR/pod-test
     run mkdir -p $tmpdir
     containersconf=$tmpdir/containers.conf
@@ -76,6 +70,9 @@ EOF
     is "$output" ".*initializing source docker://$image:.*"
 
     CONTAINERS_CONF=$containersconf run_podman 125 pod create
+    is "$output" ".*initializing source docker://$image:.*"
+
+    CONTAINERS_CONF=$containersconf run_podman 125 create --pod new:test $IMAGE
     is "$output" ".*initializing source docker://$image:.*"
 }
 
@@ -144,9 +141,6 @@ EOF
     # Pod no longer exists
     run_podman 1 pod exists $podid
     run_podman 1 pod exists $podname
-
-    # Pause image hasn't been pulled
-    run_podman 1 image exists k8s.gcr.io/pause:3.5
 }
 
 # Random byte
@@ -325,18 +319,14 @@ EOF
     local infra_name="infra_container_$(random_string 10 | tr A-Z a-z)"
     local pod_name="$(random_string 10 | tr A-Z a-z)"
 
-    # Note that the internal pause image is built even when --infra-image is
-    # set to the K8s one.
-    run_podman pod create --name $pod_name --infra-name "$infra_name" --infra-image "k8s.gcr.io/pause:3.5"
+    run_podman --noout pod create --name $pod_name --infra-name "$infra_name" --infra-image "k8s.gcr.io/pause:3.5"
+    is "$output" "" "output should be empty"
     run_podman '?' pod create --infra-name "$infra_name"
     if [ $status -eq 0 ]; then
         die "Podman should fail when user try to create two pods with the same infra-name value"
     fi
     run_podman pod rm -f $pod_name
     run_podman images -a
-
-    # Pause image hasn't been pulled
-    run_podman 1 image exists k8s.gcr.io/pause:3.5
 }
 
 @test "podman pod create --share" {
@@ -344,7 +334,7 @@ EOF
     run_podman 125 pod create --share bogus --name $pod_name
     is "$output" ".*Invalid kernel namespace to share: bogus. Options are: cgroup, ipc, net, pid, uts or none" \
        "pod test for bogus --share option"
-    run_podman pod create --share cgroup,ipc --name $pod_name
+    run_podman pod create --share ipc --name $pod_name
     run_podman run --rm --pod $pod_name --hostname foobar $IMAGE hostname
     is "$output" "foobar" "--hostname should work with non share UTS namespace"
 }
@@ -357,4 +347,38 @@ EOF
     run_podman run --rm --pod "new:$pod_name" $IMAGE hostname
     is "$output" "$pod_name" "new:POD should have hostname name set to podname"
 }
+
+@test "podman rm --force to remove infra container" {
+    local pod_name="$(random_string 10 | tr A-Z a-z)"
+    run_podman create --pod "new:$pod_name" $IMAGE
+    container_ID="$output"
+    run_podman pod inspect --format "{{.InfraContainerID}}" $pod_name
+    infra_ID="$output"
+
+    run_podman 125 container rm $infra_ID
+    is "$output" ".* and cannot be removed without removing the pod"
+    run_podman 125 container rm --force $infra_ID
+    is "$output" ".* and cannot be removed without removing the pod"
+
+    run_podman container rm --depend $infra_ID
+    is "$output" ".*$infra_ID.*"
+    is "$output" ".*$container_ID.*"
+
+    # Now make sure that --force --all works as well
+    run_podman create --pod "new:$pod_name" $IMAGE
+    container_1_ID="$output"
+    run_podman create --pod "$pod_name" $IMAGE
+    container_2_ID="$output"
+    run_podman create $IMAGE
+    container_3_ID="$output"
+    run_podman pod inspect --format "{{.InfraContainerID}}" $pod_name
+    infra_ID="$output"
+
+    run_podman container rm --force --all $infraID
+    is "$output" ".*$infra_ID.*"
+    is "$output" ".*$container_1_ID.*"
+    is "$output" ".*$container_2_ID.*"
+    is "$output" ".*$container_3_ID.*"
+}
+
 # vim: filetype=sh

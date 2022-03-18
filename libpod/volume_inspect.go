@@ -1,7 +1,7 @@
 package libpod
 
 import (
-	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v4/libpod/define"
 	pluginapi "github.com/docker/go-plugins-helpers/volume"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -60,6 +60,9 @@ func (v *Volume) Inspect() (*define.InspectVolumeData, error) {
 	data.UID = v.uid()
 	data.GID = v.gid()
 	data.Anonymous = v.config.IsAnon
+	data.MountCount = v.state.MountCount
+	data.NeedsCopyUp = v.state.NeedsCopyUp
+	data.NeedsChown = v.state.NeedsChown
 
 	return data, nil
 }

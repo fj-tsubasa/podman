@@ -6,13 +6,13 @@ import (
 	goRuntime "runtime"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/entities/types"
-	"github.com/containers/podman/v3/version"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/entities/types"
+	"github.com/containers/podman/v4/version"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -22,13 +22,13 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 
 	running, err := define.GetVersion()
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
+		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	info, err := runtime.Info()
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain system memory info"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain system memory info"))
 		return
 	}
 

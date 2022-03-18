@@ -25,14 +25,14 @@ import (
 	"github.com/containers/common/pkg/cgroups"
 	"github.com/containers/common/pkg/config"
 	conmonConfig "github.com/containers/conmon/runner/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/logs"
-	"github.com/containers/podman/v3/pkg/checkpoint/crutils"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/specgenutil"
-	"github.com/containers/podman/v3/pkg/util"
-	"github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/logs"
+	"github.com/containers/podman/v4/pkg/checkpoint/crutils"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/specgenutil"
+	"github.com/containers/podman/v4/pkg/util"
+	"github.com/containers/podman/v4/utils"
 	"github.com/containers/storage/pkg/homedir"
 	pmount "github.com/containers/storage/pkg/mount"
 	"github.com/coreos/go-systemd/v22/daemon"
@@ -660,13 +660,13 @@ func (r *ConmonOCIRuntime) HTTPAttach(ctr *Container, req *http.Request, w http.
 			}
 			errChan <- err
 		}()
+		if err := ctr.ReadLog(context.Background(), logOpts, logChan); err != nil {
+			return err
+		}
 		go func() {
 			logOpts.WaitGroup.Wait()
 			close(logChan)
 		}()
-		if err := ctr.ReadLog(context.Background(), logOpts, logChan); err != nil {
-			return err
-		}
 		logrus.Debugf("Done reading logs for container %s, %d bytes", ctr.ID(), logSize)
 		if err := <-errChan; err != nil {
 			return err
@@ -1262,7 +1262,7 @@ func (r *ConmonOCIRuntime) createOCIContainer(ctr *Container, restoreOptions *Co
 		return 0, err
 	}
 
-	pid, err := readConmonPipeData(parentSyncPipe, ociLog)
+	pid, err := readConmonPipeData(r.name, parentSyncPipe, ociLog)
 	if err != nil {
 		if err2 := r.DeleteContainer(ctr); err2 != nil {
 			logrus.Errorf("Removing container %s from runtime after creation failed", ctr.ID())
@@ -1317,6 +1317,10 @@ func (r *ConmonOCIRuntime) configureConmonEnv(ctr *Container, runtimeDir string)
 		if strings.HasPrefix(e, "LC_") {
 			env = append(env, e)
 		}
+	}
+	conf, ok := os.LookupEnv("CONTAINERS_CONF")
+	if ok {
+		env = append(env, fmt.Sprintf("CONTAINERS_CONF=%s", conf))
 	}
 	env = append(env, fmt.Sprintf("XDG_RUNTIME_DIR=%s", runtimeDir))
 	env = append(env, fmt.Sprintf("_CONTAINERS_USERNS_CONFIGURED=%s", os.Getenv("_CONTAINERS_USERNS_CONFIGURED")))
@@ -1402,7 +1406,7 @@ func (r *ConmonOCIRuntime) sharedConmonArgs(ctr *Container, cuuid, bundlePath, p
 		args = append(args, "--log-tag", logTag)
 	}
 	if ctr.config.NoCgroups {
-		logrus.Debugf("Running with no CGroups")
+		logrus.Debugf("Running with no Cgroups")
 		args = append(args, "--runtime-arg", "--cgroup-manager", "--runtime-arg", "disabled")
 	}
 	return args
@@ -1564,7 +1568,7 @@ func readConmonPidFile(pidFile string) (int, error) {
 }
 
 // readConmonPipeData attempts to read a syncInfo struct from the pipe
-func readConmonPipeData(pipe *os.File, ociLog string) (int, error) {
+func readConmonPipeData(runtimeName string, pipe *os.File, ociLog string) (int, error) {
 	// syncInfo is used to return data from monitor process to daemon
 	type syncInfo struct {
 		Data    int    `json:"data"`
@@ -1600,7 +1604,7 @@ func readConmonPipeData(pipe *os.File, ociLog string) (int, error) {
 				if err == nil {
 					var ociErr ociError
 					if err := json.Unmarshal(ociLogData, &ociErr); err == nil {
-						return -1, getOCIRuntimeError(ociErr.Msg)
+						return -1, getOCIRuntimeError(runtimeName, ociErr.Msg)
 					}
 				}
 			}
@@ -1613,13 +1617,13 @@ func readConmonPipeData(pipe *os.File, ociLog string) (int, error) {
 				if err == nil {
 					var ociErr ociError
 					if err := json.Unmarshal(ociLogData, &ociErr); err == nil {
-						return ss.si.Data, getOCIRuntimeError(ociErr.Msg)
+						return ss.si.Data, getOCIRuntimeError(runtimeName, ociErr.Msg)
 					}
 				}
 			}
 			// If we failed to parse the JSON errors, then print the output as it is
 			if ss.si.Message != "" {
-				return ss.si.Data, getOCIRuntimeError(ss.si.Message)
+				return ss.si.Data, getOCIRuntimeError(runtimeName, ss.si.Message)
 			}
 			return ss.si.Data, errors.Wrapf(define.ErrInternal, "container create failed")
 		}

@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	"github.com/containers/storage/pkg/stringid"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -598,7 +598,7 @@ var _ = Describe("Podman create", func() {
 		session := podmanTest.Podman([]string{"network", "create", netName})
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
-		defer podmanTest.removeCNINetwork(netName)
+		defer podmanTest.removeNetwork(netName)
 
 		session = podmanTest.Podman([]string{"create", "--pod", name, "--network", netName, ALPINE, "top"})
 		session.WaitWithDefaultTimeout()
@@ -692,5 +692,48 @@ var _ = Describe("Podman create", func() {
 		Expect(idata).To(HaveLen(1))
 		Expect(idata[0].Os).To(Equal(runtime.GOOS))
 		Expect(idata[0].Architecture).To(Equal("arm64"))
+	})
+
+	It("podman create --uid/gidmap --pod conflict test", func() {
+		create := podmanTest.Podman([]string{"create", "--uidmap", "0:1000:1000", "--pod", "new:testing123", ALPINE})
+		create.WaitWithDefaultTimeout()
+		Expect(create).ShouldNot(Exit(0))
+		Expect(create.ErrorToString()).To(ContainSubstring("cannot specify a new uid/gid map when entering a pod with an infra container"))
+
+		create = podmanTest.Podman([]string{"create", "--gidmap", "0:1000:1000", "--pod", "new:testing1234", ALPINE})
+		create.WaitWithDefaultTimeout()
+		Expect(create).ShouldNot(Exit(0))
+		Expect(create.ErrorToString()).To(ContainSubstring("cannot specify a new uid/gid map when entering a pod with an infra container"))
+
+	})
+
+	It("podman create --chrootdirs inspection test", func() {
+		session := podmanTest.Podman([]string{"create", "--chrootdirs", "/var/local/qwerty", ALPINE})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+
+		setup := podmanTest.Podman([]string{"container", "inspect", session.OutputToString()})
+		setup.WaitWithDefaultTimeout()
+		Expect(setup).Should(Exit(0))
+
+		data := setup.InspectContainerToJSON()
+		Expect(data).To(HaveLen(1))
+		Expect(data[0].Config.ChrootDirs).To(HaveLen(1))
+		Expect(data[0].Config.ChrootDirs[0]).To(Equal("/var/local/qwerty"))
+	})
+
+	It("podman create --chrootdirs functionality test", func() {
+		session := podmanTest.Podman([]string{"create", "-t", "--chrootdirs", "/var/local/qwerty", ALPINE, "/bin/cat"})
+		session.WaitWithDefaultTimeout()
+		Expect(session).Should(Exit(0))
+		ctrID := session.OutputToString()
+
+		setup := podmanTest.Podman([]string{"start", ctrID})
+		setup.WaitWithDefaultTimeout()
+		Expect(setup).Should(Exit(0))
+
+		setup = podmanTest.Podman([]string{"exec", ctrID, "cmp", "/etc/resolv.conf", "/var/local/qwerty/etc/resolv.conf"})
+		setup.WaitWithDefaultTimeout()
+		Expect(setup).Should(Exit(0))
 	})
 })

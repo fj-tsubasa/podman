@@ -113,6 +113,7 @@ while :;do
         echo STOPPING
         podman \$opts stop -t 0 myrunningcontainer || true
         podman \$opts rm -f     myrunningcontainer || true
+        podman \$opts network rm -f mynetwork
         exit 0
     fi
     sleep 0.5
@@ -131,6 +132,9 @@ EOF
     # --mac-address is needed to create /run/cni, --network is needed to create /run/containers for dnsname
     $PODMAN run --rm --mac-address 78:28:a6:8d:24:8a --network $netname $OLD_PODMAN true
     $PODMAN network rm -f $netname
+
+    # Podman 4.0 might no longer use cni so /run/cni and /run/containers will no be created in this case
+    mkdir -p /run/cni /run/containers
 
 
     #
@@ -177,6 +181,13 @@ EOF
     :
 }
 
+@test "info" {
+    # check network backend, since this is a old version we should use CNI
+    # when we start testing from 4.0 we should have netavark as backend
+    run_podman info --format '{{.Host.NetworkBackend}}'
+    is "$output" "cni" "correct network backend"
+}
+
 @test "images" {
     run_podman images -a --format '{{.Names}}'
     is "$output" "\[$IMAGE\]" "podman images"
@@ -212,7 +223,7 @@ EOF
 @test "inspect - all container status" {
     tests="
 running   | running    |  0
-created   | configured |  0
+created   | created    |  0
 done      | exited     |  0
 failed    | exited     | 17
 "
@@ -328,8 +339,6 @@ failed    | exited     | 17
 
     run_podman logs podman_parent
     run_podman rm -f podman_parent
-
-    run_podman network rm -f mynetwork
 
     umount $PODMAN_UPGRADE_WORKDIR/root/overlay || true
 

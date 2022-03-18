@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
 	docker "github.com/docker/docker/api/types"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
@@ -29,11 +29,11 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 		Stream: true,
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 	if query.Stream && query.OneShot { // mismatch. one-shot can only be passed with stream=false
-		utils.Error(w, "invalid combination of stream and one-shot", http.StatusBadRequest, define.ErrInvalidArg)
+		utils.Error(w, http.StatusBadRequest, define.ErrInvalidArg)
 		return
 	}
 
@@ -52,7 +52,7 @@ func StatsContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if state != define.ContainerStateRunning {
-		utils.Error(w, "Container not running and streaming requested", http.StatusConflict, define.ErrCtrStateInvalid)
+		utils.Error(w, http.StatusConflict, define.ErrCtrStateInvalid)
 		return
 	}
 
@@ -109,7 +109,7 @@ streamLabel: // A label to flatten the scope
 			return
 		}
 		// Cgroup stats
-		cgroupPath, err := ctnr.CGroupPath()
+		cgroupPath, err := ctnr.CgroupPath()
 		if err != nil {
 			logrus.Errorf("Unable to get cgroup path of container: %v", err)
 			return

@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/containers/podman/v3/pkg/api/handlers/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/libpod"
 	"github.com/gorilla/mux"
 )
 
@@ -18,8 +18,10 @@ func (s *APIServer) registerPlayHandlers(r *mux.Router) error {
 	// parameters:
 	//  - in: query
 	//    name: network
-	//    type: string
-	//    description: Connect the pod to this network.
+	//    type: array
+	//    description: USe the network mode or specify an array of networks.
+	//    items:
+	//      type: string
 	//  - in: query
 	//    name: tlsVerify
 	//    type: boolean

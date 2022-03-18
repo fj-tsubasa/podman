@@ -5,18 +5,8 @@ load helpers
 @test "podman run - basic tests" {
     rand=$(random_string 30)
 
-    # 2019-09 Fedora 31 and rawhide (32) are switching from runc to crun
-    # because of cgroups v2; crun emits different error messages.
-    # Default to runc:
-    err_no_such_cmd="Error: .*: starting container process caused.*exec:.*stat /no/such/command: no such file or directory"
-    err_no_exec_dir="Error: .*: starting container process caused.*exec:.* permission denied"
-
-    # ...but check the configured runtime engine, and switch to crun as needed
-    run_podman info --format '{{ .Host.OCIRuntime.Path }}'
-    if expr "$output" : ".*/crun"; then
-        err_no_such_cmd="Error: executable file.* not found in \$PATH: No such file or directory: OCI runtime attempted to invoke a command that was not found"
-        err_no_exec_dir="Error: open executable: Operation not permitted: OCI permission denied"
-    fi
+    err_no_such_cmd="Error:.*/no/such/command.*[Nn]o such file or directory"
+    err_no_exec_dir="Error:.*exec.*permission denied"
 
     tests="
 true              |   0 |
@@ -509,6 +499,21 @@ json-file | f
     rm -f $new_runtime
 }
 
+@test "podman --noout run should print output" {
+    run_podman --noout run -d --name test $IMAGE echo hi
+    is "$output" "" "output should be empty"
+    run_podman wait test
+    run_podman --noout rm test
+    is "$output" "" "output should be empty"
+}
+
+@test "podman --noout create should print output" {
+    run_podman --noout create --name test $IMAGE echo hi
+    is "$output" "" "output should be empty"
+    run_podman --noout rm test
+    is "$output" "" "output should be empty"
+}
+
 # Regression test for issue #8082
 @test "podman run : look up correct image name" {
     # Create a 2nd tag for the local image. Force to lower case, and apply it.
@@ -586,9 +591,7 @@ json-file | f
 @test "podman run with --net=host and --port prints warning" {
     rand=$(random_string 10)
 
-    # Please keep the duplicate "--net" options; this tests against #8507,
-    # a regression in which subsequent --net options did not override earlier.
-    run_podman run --rm -p 8080 --net=none --net=host $IMAGE echo $rand
+    run_podman run --rm -p 8080 --net=host $IMAGE echo $rand
     is "${lines[0]}" \
        "Port mappings have been discarded as one of the Host, Container, Pod, and None network modes are in use" \
        "Warning is emitted before container output"
@@ -713,6 +716,18 @@ EOF
     run_podman rmi nomtab
 }
 
+@test "podman run --hostuser tests" {
+    skip_if_not_rootless "test whether hostuser is successfully added"
+    user=$(id -un)
+    run_podman 1 run --rm $IMAGE grep $user /etc/passwd
+    run_podman run --hostuser=$user --rm $IMAGE grep $user /etc/passwd
+    user=$(id -u)
+    run_podman run --hostuser=$user --rm $IMAGE grep $user /etc/passwd
+    run_podman run --hostuser=$user --user $user --rm $IMAGE grep $user /etc/passwd
+    user=bogus
+    run_podman 126 run --hostuser=$user --rm $IMAGE grep $user /etc/passwd
+}
+
 @test "podman run --device-cgroup-rule tests" {
     skip_if_rootless "cannot add devices in rootless mode"
 
@@ -758,4 +773,46 @@ EOF
     is "$output" ".*TERM=abc" "missing TERM environment variable despite TERM being set on commandline"
 }
 
+@test "podman run - no /etc/hosts" {
+    skip_if_rootless "cannot move /etc/hosts file as a rootless user"
+    tmpfile=$PODMAN_TMPDIR/hosts
+    mv /etc/hosts $tmpfile
+    run_podman '?' run --rm --add-host "foo.com:1.2.3.4" $IMAGE cat "/etc/hosts"
+    mv $tmpfile /etc/hosts
+    is "$status" 0                   "podman run without /etc/hosts file should work"
+    is "$output" "1.2.3.4 foo.com.*" "users can add hosts even without /etc/hosts"
+}
+
+# rhbz#1854566 : $IMAGE has incorrect permission 555 on the root '/' filesystem
+@test "podman run image with filesystem permission" {
+    # make sure the IMAGE image have permissiong of 555 like filesystem RPM expects
+    run_podman run --rm $IMAGE stat -c %a /
+    is "$output" "555" "directory permissions on /"
+}
+
+# rhbz#1763007 : the --log-opt for podman run does not work as expected
+@test "podman run with log-opt option" {
+    # Pseudorandom size of the form N.NNN. The '| 1' handles '0.NNN' or 'N.NN0',
+    # which podman displays as 'NNN kB' or 'N.NN MB' respectively.
+    size=$(printf "%d.%03d" $(($RANDOM % 10 | 1)) $(($RANDOM % 100 | 1)))
+    run_podman run -d --rm --log-opt max-size=${size}m $IMAGE sleep 5
+    cid=$output
+    run_podman inspect --format "{{ .HostConfig.LogConfig.Size }}" $cid
+    is "$output" "${size}MB"
+    run_podman rm -t 0 -f $cid
+}
+
+@test "podman run --kernel-memory warning" {
+    # Not sure what situations this fails in, but want to make sure warning shows.
+    run_podman '?' run --rm --kernel-memory 100 $IMAGE false
+    is "$output" ".*The --kernel-memory flag is no longer supported. This flag is a noop." "warn on use of --kernel-memory"
+
+}
+
+# rhbz#1902979 : podman run fails to update /etc/hosts when --uidmap is provided
+@test "podman run update /etc/hosts" {
+    HOST=$(random_string 25)
+    run_podman run --uidmap 0:10001:10002 --rm --hostname ${HOST} $IMAGE grep ${HOST} /etc/hosts
+    is "${lines[0]}" ".*${HOST}.*"
+}
 # vim: filetype=sh

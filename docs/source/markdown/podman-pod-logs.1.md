@@ -22,11 +22,15 @@ By default `podman pod logs` retrieves logs for all the containers available wit
 Follow log output.  Default is false.
 
 Note: If you are following a pod which is removed `podman pod rm`, then there is a
-chance the the log file will be removed before `podman pod logs` reads the final content.
+chance that the log file will be removed before `podman pod logs` reads the final content.
 
 #### **--latest**, **-l**
 
-Instead of providing the pod name or id, get logs of the last created pod. (This option is not available with the remote Podman client)
+Instead of providing the pod name or id, get logs of the last created pod. (This option is not available with the remote Podman client, including Mac and Windows (excluding WSL2) machines)
+
+#### **--names**, **-n**
+
+Output the container names instead of the container IDs in the log.
 
 #### **--since**=*TIMESTAMP*
 

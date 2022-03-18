@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/containers/common/libimage"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/pkg/errors"
 )
 
@@ -26,9 +26,9 @@ func (ir *ImageEngine) List(ctx context.Context, opts entities.ImageListOptions)
 
 	summaries := []*entities.ImageSummary{}
 	for _, img := range images {
-		digests := make([]string, len(img.Digests()))
-		for j, d := range img.Digests() {
-			digests[j] = string(d)
+		repoDigests, err := img.RepoDigests()
+		if err != nil {
+			return nil, errors.Wrapf(err, "getting repoDigests from image %q", img.ID())
 		}
 		isDangling, err := img.IsDangling(ctx)
 		if err != nil {
@@ -37,11 +37,12 @@ func (ir *ImageEngine) List(ctx context.Context, opts entities.ImageListOptions)
 
 		e := entities.ImageSummary{
 			ID: img.ID(),
-			//			ConfigDigest: string(img.ConfigDigest),
+			// TODO: libpod/image didn't set it but libimage should
+			// ConfigDigest: string(img.ConfigDigest),
 			Created:     img.Created().Unix(),
 			Dangling:    isDangling,
 			Digest:      string(img.Digest()),
-			RepoDigests: digests,
+			RepoDigests: repoDigests,
 			History:     img.NamesHistory(),
 			Names:       img.Names(),
 			ReadOnly:    img.IsReadOnly(),

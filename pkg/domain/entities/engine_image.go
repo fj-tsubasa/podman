@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/pkg/domain/entities/reports"
+	"github.com/containers/podman/v4/pkg/domain/entities/reports"
 )
 
 type ImageEngine interface {
@@ -27,16 +27,16 @@ type ImageEngine interface {
 	ShowTrust(ctx context.Context, args []string, options ShowTrustOptions) (*ShowTrustReport, error)
 	Shutdown(ctx context.Context)
 	Tag(ctx context.Context, nameOrID string, tags []string, options ImageTagOptions) error
-	Transfer(ctx context.Context, scpOpts ImageScpOptions) error
+	Transfer(ctx context.Context, source ImageScpOptions, dest ImageScpOptions, parentFlags []string) error
 	Tree(ctx context.Context, nameOrID string, options ImageTreeOptions) (*ImageTreeReport, error)
 	Unmount(ctx context.Context, images []string, options ImageUnmountOptions) ([]*ImageUnmountReport, error)
 	Untag(ctx context.Context, nameOrID string, tags []string, options ImageUntagOptions) error
-	ManifestCreate(ctx context.Context, names, images []string, opts ManifestCreateOptions) (string, error)
+	ManifestCreate(ctx context.Context, name string, images []string, opts ManifestCreateOptions) (string, error)
 	ManifestExists(ctx context.Context, name string) (*BoolReport, error)
 	ManifestInspect(ctx context.Context, name string) ([]byte, error)
-	ManifestAdd(ctx context.Context, opts ManifestAddOptions) (string, error)
-	ManifestAnnotate(ctx context.Context, names []string, opts ManifestAnnotateOptions) (string, error)
-	ManifestRemove(ctx context.Context, names []string) (string, error)
+	ManifestAdd(ctx context.Context, listName string, imageNames []string, opts ManifestAddOptions) (string, error)
+	ManifestAnnotate(ctx context.Context, names, image string, opts ManifestAnnotateOptions) (string, error)
+	ManifestRemoveDigest(ctx context.Context, names, image string) (string, error)
 	ManifestRm(ctx context.Context, names []string) (*ImageRemoveReport, []error)
 	ManifestPush(ctx context.Context, name, destination string, imagePushOpts ImagePushOptions) (string, error)
 	Sign(ctx context.Context, names []string, options SignOptions) (*SignReport, error)

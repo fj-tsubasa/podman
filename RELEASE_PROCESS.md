@@ -166,6 +166,8 @@ spelled with complete minutiae.
       `git log -1 $(git tag | sort -V | tail -1)`.
    1. Edit `version/version.go` and bump the `Version` value to the new
       release version.  If there were API changes, also bump `APIVersion` value.
+      Make sure to also bump the version in the swagger.yaml `pkg/api/server/docs.go`
+      and to add a new entry in `docs/source/Reference.rst` for major and minor releases.
    1. Commit this and sign the commit (`git commit -a -s -S`). The commit message
       should be `Bump to vX.Y.Z` (using the actual version numbers).
    1. Push this single change to your github fork, and make a new PR,
@@ -234,18 +236,22 @@ spelled with complete minutiae.
 
    1. Return to the Cirrus-CI Build page for the new release tag, confirm
       (or wait for) it to complete, re-running any failed tasks as appropriate.
-   1. For anything other than an RC, download the new release artifacts from CI
-      (the binaries which were actually tested).  The items are
-      located under the *checks* tab in github for:
+   1. For anything other than an RC, the release artifacts need to be published along
+      with the release. These can be built locally using:
 
-      * `Cirrus CI / Alt Arch. Cross` - tarball for each architecture
-      * `Cirrus CI / OSX Cross` - two zip files (amd64 and arm64)
-      * `Cirrus CI / Windows Cross` - an `msi` file
+      ```shell
+      $ git checkout vX.Y.Z
+      $ make podman-remote-release-darwin_amd64.zip \
+          podman-remote-release-darwin_arm64.zip \
+          podman-remote-release-windows_amd64.zip \
+          podman.msi \
+          podman-remote-static
+      $ mv podman-* bin/
+      $ cd bin/
+      $ tar -cvzf podman-remote-static.tar.gz podman-remote-static
+      $ sha256sum *.zip *.msi *.tar.gz > shasums
+      ```
 
-      Under the "Artifacts" section of each task, click the "gosrc" link,
-      find and download the release archive (`zip`, `tar.gz` or `.msi`).
-      Save the the archive with a meaningful name, for example
-      `podman-v3.0.0.msi`.
    1. The `podman-vX.Y.Z.dmg` file is produced manually by someone in
       possession of a developer signing key.
    1. In the directory where you downloaded the archives, run
@@ -261,8 +267,10 @@ spelled with complete minutiae.
       that to upload the artifacts you previously downloaded, including
       the `shasums` file.
 
-      * podman-remote-release-darwin.zip
-      * podman-remote-release-windows.zip
+      * podman-remote-release-darwin_amd64.zip
+      * podman-remote-release-darwin_arm64.zip
+      * podman-remote-release-windows_amd64.zip
       * podman-vX.Y.Z.msi
+      * podman-remote-static.tar.gz
       * shasums
    1. Save the release.

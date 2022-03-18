@@ -17,8 +17,7 @@ limitations under the License.
 package kubeutils
 
 import (
-	"github.com/containers/podman/v3/libpod/define"
-	"k8s.io/apimachinery/pkg/util/runtime"
+	"github.com/containers/podman/v4/libpod/define"
 )
 
 // HandleResizing spawns a goroutine that processes the resize channel, calling resizeFunc for each
@@ -30,8 +29,6 @@ func HandleResizing(resize <-chan define.TerminalSize, resizeFunc func(size defi
 	}
 
 	go func() {
-		defer runtime.HandleCrash()
-
 		for {
 			size, ok := <-resize
 			if !ok {

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/podman/v3/libpod/define"
-	. "github.com/containers/podman/v3/pkg/bindings"
-	"github.com/containers/podman/v3/pkg/bindings/containers"
-	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/containers/podman/v4/libpod/define"
+	. "github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/pkg/bindings/containers"
+	"github.com/containers/podman/v4/pkg/specgen"
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega/gexec"
 	"github.com/pkg/errors"
@@ -86,7 +86,7 @@ func (b *bindingTest) runPodman(command []string) *gexec.Session {
 	}
 	val, ok = os.LookupEnv("CNI_CONFIG_DIR")
 	if ok {
-		cmd = append(cmd, "--cni-config-dir", val)
+		cmd = append(cmd, "--network-config-dir", val)
 	}
 	val, ok = os.LookupEnv("CONMON")
 	if ok {

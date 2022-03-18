@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -124,5 +124,17 @@ USER 1000`, ALPINE)
 		session.WaitWithDefaultTimeout()
 		Expect(session).Should(Exit(0))
 		Expect(session.OutputToString()).To(Not(ContainSubstring("/etc/group")))
+	})
+
+	It("podman run --no-manage-passwd flag", func() {
+		run := podmanTest.Podman([]string{"run", "--user", "1234:1234", ALPINE, "cat", "/etc/passwd"})
+		run.WaitWithDefaultTimeout()
+		Expect(run).Should(Exit(0))
+		Expect(run.OutputToString()).To(ContainSubstring("1234:1234"))
+
+		run = podmanTest.Podman([]string{"run", "--passwd=false", "--user", "1234:1234", ALPINE, "cat", "/etc/passwd"})
+		run.WaitWithDefaultTimeout()
+		Expect(run).Should(Exit(0))
+		Expect(run.OutputToString()).NotTo((ContainSubstring("1234:1234")))
 	})
 })

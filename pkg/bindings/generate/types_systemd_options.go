@@ -4,7 +4,7 @@ package generate
 import (
 	"net/url"
 
-	"github.com/containers/podman/v3/pkg/bindings/internal/util"
+	"github.com/containers/podman/v4/pkg/bindings/internal/util"
 )
 
 // Changed returns true if named field has been set
@@ -180,4 +180,49 @@ func (o *SystemdOptions) GetSeparator() string {
 		return z
 	}
 	return *o.Separator
+}
+
+// WithWants set field Wants to given value
+func (o *SystemdOptions) WithWants(value []string) *SystemdOptions {
+	o.Wants = &value
+	return o
+}
+
+// GetWants returns value of field Wants
+func (o *SystemdOptions) GetWants() []string {
+	if o.Wants == nil {
+		var z []string
+		return z
+	}
+	return *o.Wants
+}
+
+// WithAfter set field After to given value
+func (o *SystemdOptions) WithAfter(value []string) *SystemdOptions {
+	o.After = &value
+	return o
+}
+
+// GetAfter returns value of field After
+func (o *SystemdOptions) GetAfter() []string {
+	if o.After == nil {
+		var z []string
+		return z
+	}
+	return *o.After
+}
+
+// WithRequires set field Requires to given value
+func (o *SystemdOptions) WithRequires(value []string) *SystemdOptions {
+	o.Requires = &value
+	return o
+}
+
+// GetRequires returns value of field Requires
+func (o *SystemdOptions) GetRequires() []string {
+	if o.Requires == nil {
+		var z []string
+		return z
+	}
+	return *o.Requires
 }

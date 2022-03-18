@@ -19,16 +19,18 @@ import (
 	"time"
 
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/events"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/namespaces"
-	"github.com/containers/podman/v3/pkg/netns"
-	"github.com/containers/podman/v3/pkg/resolvconf"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/common/libnetwork/types"
+	"github.com/containers/common/pkg/netns"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/events"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/namespaces"
+	"github.com/containers/podman/v4/pkg/resolvconf"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/util"
+	"github.com/containers/podman/v4/utils"
 	"github.com/containers/storage/pkg/lockfile"
+	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -53,41 +55,6 @@ const (
 	persistentCNIDir = "/var/lib/cni"
 )
 
-// GetAllNetworkAliases returns all configured aliases for this container.
-// It also adds the container short ID as alias to match docker.
-func (c *Container) GetAllNetworkAliases() (map[string][]string, error) {
-	allAliases, err := c.runtime.state.GetAllNetworkAliases(c)
-	if err != nil {
-		return nil, err
-	}
-
-	// get the all attached networks, we cannot use GetAllNetworkAliases()
-	// since it returns nil if there are no aliases
-	nets, _, err := c.networks()
-	if err != nil {
-		return nil, err
-	}
-
-	// add container short ID as alias to match docker
-	for _, net := range nets {
-		allAliases[net] = append(allAliases[net], c.config.ID[:12])
-	}
-	return allAliases, nil
-}
-
-// GetNetworkAliases returns configured aliases for this network.
-// It also adds the container short ID as alias to match docker.
-func (c *Container) GetNetworkAliases(netName string) ([]string, error) {
-	aliases, err := c.runtime.state.GetNetworkAliases(c, netName)
-	if err != nil {
-		return nil, err
-	}
-
-	// add container short ID as alias to match docker
-	aliases = append(aliases, c.config.ID[:12])
-	return aliases, nil
-}
-
 // convertPortMappings will remove the HostIP part from the ports when running inside podman machine.
 // This is need because a HostIP of 127.0.0.1 would now allow the gvproxy forwarder to reach to open ports.
 // For machine the HostIP must only be used by gvproxy and never in the VM.
@@ -104,53 +71,20 @@ func (c *Container) convertPortMappings() []types.PortMapping {
 	return newPorts
 }
 
-func (c *Container) getNetworkOptions() (types.NetworkOptions, error) {
+func (c *Container) getNetworkOptions(networkOpts map[string]types.PerNetworkOptions) (types.NetworkOptions, error) {
 	opts := types.NetworkOptions{
 		ContainerID:   c.config.ID,
 		ContainerName: getCNIPodName(c),
 	}
 	opts.PortMappings = c.convertPortMappings()
-	networks, _, err := c.networks()
-	if err != nil {
-		return opts, err
-	}
-	aliases, err := c.GetAllNetworkAliases()
-	if err != nil {
-		return opts, err
-	}
 
 	// If the container requested special network options use this instead of the config.
 	// This is the case for container restore or network reload.
 	if c.perNetworkOpts != nil {
 		opts.Networks = c.perNetworkOpts
-		return opts, nil
+	} else {
+		opts.Networks = networkOpts
 	}
-
-	// Update container map of interface descriptions
-	if err := c.setupNetworkDescriptions(networks); err != nil {
-		return opts, err
-	}
-
-	nets := make(map[string]types.PerNetworkOptions, len(networks))
-	for i, network := range networks {
-		eth, exists := c.state.NetInterfaceDescriptions.getInterfaceByName(network)
-		if !exists {
-			return opts, errors.Errorf("no network interface name for container %s on network %s", c.config.ID, network)
-		}
-		netOpts := types.PerNetworkOptions{
-			InterfaceName: eth,
-			Aliases:       aliases[network],
-		}
-		// only set the static ip/mac on the first network
-		if i == 0 {
-			if c.config.StaticIP != nil {
-				netOpts.StaticIPs = []net.IP{c.config.StaticIP}
-			}
-			netOpts.StaticMAC = c.config.StaticMAC
-		}
-		nets[network] = netOpts
-	}
-	opts.Networks = nets
 	return opts, nil
 }
 
@@ -387,7 +321,7 @@ func (r *RootlessNetNS) Cleanup(runtime *Runtime) error {
 		// only if the netns is empty we know that we do not need cleanup
 		return c.state.NetNS != nil
 	}
-	ctrs, err := runtime.GetContainersWithoutLock(activeNetns)
+	ctrs, err := runtime.GetContainers(activeNetns)
 	if err != nil {
 		return err
 	}
@@ -563,6 +497,12 @@ func (r *Runtime) GetRootlessNetNs(new bool) (*RootlessNetNS, error) {
 			return nil, err
 		}
 
+		// move to systemd scope to prevent systemd from killing it
+		err = utils.MoveRootlessNetnsSlirpProcessToUserSlice(cmd.Process.Pid)
+		if err != nil {
+			logrus.Errorf("failed to move the rootless netns slirp4netns process to the systemd user.slice: %v", err)
+		}
+
 		// build a new resolv.conf file which uses the slirp4netns dns server address
 		resolveIP, err := GetSlirp4netnsDNS(nil)
 		if err != nil {
@@ -697,7 +637,7 @@ func (r *Runtime) configureNetNS(ctr *Container, ctrNS ns.NetNS) (status map[str
 	if ctr.config.NetMode.IsSlirp4netns() {
 		return nil, r.setupSlirp4netns(ctr, ctrNS)
 	}
-	networks, _, err := ctr.networks()
+	networks, err := ctr.networks()
 	if err != nil {
 		return nil, err
 	}
@@ -707,7 +647,7 @@ func (r *Runtime) configureNetNS(ctr *Container, ctrNS ns.NetNS) (status map[str
 		return nil, nil
 	}
 
-	netOpts, err := ctr.getNetworkOptions()
+	netOpts, err := ctr.getNetworkOptions(networks)
 	if err != nil {
 		return nil, err
 	}
@@ -862,13 +802,13 @@ func (r *Runtime) teardownCNI(ctr *Container) error {
 
 	logrus.Debugf("Tearing down network namespace at %s for container %s", ctr.state.NetNS.Path(), ctr.ID())
 
-	networks, _, err := ctr.networks()
+	networks, err := ctr.networks()
 	if err != nil {
 		return err
 	}
 
 	if !ctr.config.NetMode.IsSlirp4netns() && len(networks) > 0 {
-		netOpts, err := ctr.getNetworkOptions()
+		netOpts, err := ctr.getNetworkOptions(networks)
 		if err != nil {
 			return err
 		}
@@ -902,21 +842,25 @@ func (r *Runtime) teardownNetNS(ctr *Container) error {
 	return nil
 }
 
-func getContainerNetNS(ctr *Container) (string, error) {
+func getContainerNetNS(ctr *Container) (string, *Container, error) {
 	if ctr.state.NetNS != nil {
-		return ctr.state.NetNS.Path(), nil
+		return ctr.state.NetNS.Path(), nil, nil
 	}
 	if ctr.config.NetNsCtr != "" {
 		c, err := ctr.runtime.GetContainer(ctr.config.NetNsCtr)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if err = c.syncContainer(); err != nil {
-			return "", err
+			return "", c, err
 		}
-		return getContainerNetNS(c)
+		netNs, c2, err := getContainerNetNS(c)
+		if c2 != nil {
+			c = c2
+		}
+		return netNs, c, err
 	}
-	return "", nil
+	return "", nil, nil
 }
 
 // isBridgeNetMode checks if the given network mode is bridge.
@@ -960,22 +904,17 @@ func (r *Runtime) reloadContainerNetwork(ctr *Container) (map[string]types.Statu
 		}
 	}
 
-	aliases, err := ctr.GetAllNetworkAliases()
+	networkOpts, err := ctr.networks()
 	if err != nil {
 		return nil, err
 	}
 
 	// Set the same network settings as before..
 	netStatus := ctr.getNetworkStatus()
-	netOpts := make(map[string]types.PerNetworkOptions, len(netStatus))
-	for network, status := range netStatus {
-		perNetOpts := types.PerNetworkOptions{}
-		for name, netInt := range status.Interfaces {
-			perNetOpts = types.PerNetworkOptions{
-				InterfaceName: name,
-				Aliases:       aliases[network],
-				StaticMAC:     netInt.MacAddress,
-			}
+	for network, perNetOpts := range networkOpts {
+		for name, netInt := range netStatus[network].Interfaces {
+			perNetOpts.InterfaceName = name
+			perNetOpts.StaticMAC = netInt.MacAddress
 			for _, netAddress := range netInt.Subnets {
 				perNetOpts.StaticIPs = append(perNetOpts.StaticIPs, netAddress.IPNet.IP)
 			}
@@ -983,28 +922,17 @@ func (r *Runtime) reloadContainerNetwork(ctr *Container) (map[string]types.Statu
 			// For now just use the first interface to get the ips this should be good enough for most cases.
 			break
 		}
-		if perNetOpts.InterfaceName == "" {
-			eth, exists := ctr.state.NetInterfaceDescriptions.getInterfaceByName(network)
-			if !exists {
-				return nil, errors.Errorf("no network interface name for container %s on network %s", ctr.config.ID, network)
-			}
-			perNetOpts.InterfaceName = eth
-		}
-		netOpts[network] = perNetOpts
+		networkOpts[network] = perNetOpts
 	}
-	ctr.perNetworkOpts = netOpts
+	ctr.perNetworkOpts = networkOpts
 
 	return r.configureNetNS(ctr, ctr.state.NetNS)
 }
 
 func getContainerNetIO(ctr *Container) (*netlink.LinkStatistics, error) {
 	var netStats *netlink.LinkStatistics
-	// With slirp4netns, we can't collect statistics at present.
-	// For now, we allow stats to at least run by returning nil
-	if rootless.IsRootless() || ctr.config.NetMode.IsSlirp4netns() {
-		return netStats, nil
-	}
-	netNSPath, netPathErr := getContainerNetNS(ctr)
+
+	netNSPath, otherCtr, netPathErr := getContainerNetNS(ctr)
 	if netPathErr != nil {
 		return nil, netPathErr
 	}
@@ -1013,9 +941,18 @@ func getContainerNetIO(ctr *Container) (*netlink.LinkStatistics, error) {
 		// this is a valid state and thus return no error, nor any statistics
 		return nil, nil
 	}
+
+	// FIXME get the interface from the container netstatus
+	dev := "eth0"
+	netMode := ctr.config.NetMode
+	if otherCtr != nil {
+		netMode = otherCtr.config.NetMode
+	}
+	if netMode.IsSlirp4netns() {
+		dev = "tap0"
+	}
 	err := ns.WithNetNSPath(netNSPath, func(_ ns.NetNS) error {
-		// FIXME get the interface from the container netstatus
-		link, err := netlink.LinkByName("eth0")
+		link, err := netlink.LinkByName(dev)
 		if err != nil {
 			return err
 		}
@@ -1049,25 +986,33 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 	settings := new(define.InspectNetworkSettings)
 	settings.Ports = makeInspectPortBindings(c.config.PortMappings, c.config.ExposedPorts)
 
-	networks, isDefault, err := c.networks()
+	networks, err := c.networks()
 	if err != nil {
 		return nil, err
 	}
 
-	// We can't do more if the network is down.
 	if c.state.NetNS == nil {
+		if networkNSPath := c.joinedNetworkNSPath(); networkNSPath != "" {
+			if result, err := c.inspectJoinedNetworkNS(networkNSPath); err == nil {
+				if basicConfig, err := resultToBasicNetworkConfig(result); err == nil {
+					// fallback to dummy configuration
+					settings.InspectBasicNetworkConfig = basicConfig
+					return settings, nil
+				}
+			}
+			// do not propagate error inspecting a joined network ns
+			logrus.Errorf("Error inspecting network namespace: %s of container %s: %v", networkNSPath, c.ID(), err)
+		}
+		// We can't do more if the network is down.
+
 		// We still want to make dummy configurations for each CNI net
 		// the container joined.
 		if len(networks) > 0 {
 			settings.Networks = make(map[string]*define.InspectAdditionalNetwork, len(networks))
-			for _, net := range networks {
+			for net, opts := range networks {
 				cniNet := new(define.InspectAdditionalNetwork)
 				cniNet.NetworkID = net
-				aliases, err := c.GetNetworkAliases(net)
-				if err != nil {
-					return nil, err
-				}
-				cniNet.Aliases = aliases
+				cniNet.Aliases = opts.Aliases
 				settings.Networks[net] = cniNet
 			}
 		}
@@ -1092,7 +1037,7 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 
 		settings.Networks = make(map[string]*define.InspectAdditionalNetwork)
 
-		for _, name := range networks {
+		for name, opts := range networks {
 			result := netStatus[name]
 			addedNet := new(define.InspectAdditionalNetwork)
 			addedNet.NetworkID = name
@@ -1101,19 +1046,17 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 			if err != nil {
 				return nil, err
 			}
-
-			aliases, err := c.GetNetworkAliases(name)
-			if err != nil {
-				return nil, err
-			}
-			addedNet.Aliases = aliases
+			addedNet.Aliases = opts.Aliases
 
 			addedNet.InspectBasicNetworkConfig = basicConfig
 
 			settings.Networks[name] = addedNet
 		}
 
-		if !isDefault {
+		// if not only the default network is connected we can return here
+		// otherwise we have to populate the InspectBasicNetworkConfig settings
+		_, isDefaultNet := networks[c.runtime.config.Network.DefaultNetwork]
+		if !(len(networks) == 1 && isDefaultNet) {
 			return settings, nil
 		}
 	}
@@ -1135,34 +1078,84 @@ func (c *Container) getContainerNetworkInfo() (*define.InspectNetworkSettings, e
 	return settings, nil
 }
 
-// setupNetworkDescriptions adds networks and eth values to the container's
-// network descriptions
-func (c *Container) setupNetworkDescriptions(networks []string) error {
-	// if the map is nil and we have networks
-	if c.state.NetInterfaceDescriptions == nil && len(networks) > 0 {
-		c.state.NetInterfaceDescriptions = make(ContainerNetworkDescriptions)
-	}
-	origLen := len(c.state.NetInterfaceDescriptions)
-	for _, n := range networks {
-		// if the network is not in the map, add it
-		if _, exists := c.state.NetInterfaceDescriptions[n]; !exists {
-			c.state.NetInterfaceDescriptions.add(n)
+func (c *Container) joinedNetworkNSPath() string {
+	for _, namespace := range c.config.Spec.Linux.Namespaces {
+		if namespace.Type == spec.NetworkNamespace {
+			return namespace.Path
 		}
 	}
-	// if the map changed, we need to save the container state
-	if origLen != len(c.state.NetInterfaceDescriptions) {
-		if err := c.save(); err != nil {
+	return ""
+}
+
+func (c *Container) inspectJoinedNetworkNS(networkns string) (q types.StatusBlock, retErr error) {
+	var result types.StatusBlock
+	err := ns.WithNetNSPath(networkns, func(_ ns.NetNS) error {
+		ifaces, err := net.Interfaces()
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+		if err != nil {
+			return err
+		}
+		var gateway net.IP
+		for _, route := range routes {
+			// default gateway
+			if route.Dst == nil {
+				gateway = route.Gw
+			}
+		}
+		result.Interfaces = make(map[string]types.NetInterface)
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			if len(addrs) == 0 {
+				continue
+			}
+			subnets := make([]types.NetAddress, 0, len(addrs))
+			for _, address := range addrs {
+				if ipnet, ok := address.(*net.IPNet); ok {
+					if ipnet.IP.IsLinkLocalMulticast() || ipnet.IP.IsLinkLocalUnicast() {
+						continue
+					}
+					subnet := types.NetAddress{
+						IPNet: types.IPNet{
+							IPNet: *ipnet,
+						},
+					}
+					if ipnet.Contains(gateway) {
+						subnet.Gateway = gateway
+					}
+					subnets = append(subnets, subnet)
+				}
+			}
+			result.Interfaces[iface.Name] = types.NetInterface{
+				Subnets:    subnets,
+				MacAddress: types.HardwareAddr(iface.HardwareAddr),
+			}
+		}
+		return nil
+	})
+	return result, err
 }
 
 // resultToBasicNetworkConfig produces an InspectBasicNetworkConfig from a CNI
 // result
 func resultToBasicNetworkConfig(result types.StatusBlock) (define.InspectBasicNetworkConfig, error) {
 	config := define.InspectBasicNetworkConfig{}
-	for _, netInt := range result.Interfaces {
+	interfaceNames := make([]string, len(result.Interfaces))
+	for interfaceName := range result.Interfaces {
+		interfaceNames = append(interfaceNames, interfaceName)
+	}
+	// ensure consistent inspect results by sorting
+	sort.Strings(interfaceNames)
+	for _, interfaceName := range interfaceNames {
+		netInt := result.Interfaces[interfaceName]
 		for _, netAddress := range netInt.Subnets {
 			size, _ := netAddress.IPNet.Mask.Size()
 			if netAddress.IPNet.IP.To4() != nil {
@@ -1213,7 +1206,7 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	networks, err := c.networksByNameIndex()
+	networks, err := c.networks()
 	if err != nil {
 		return err
 	}
@@ -1254,14 +1247,8 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 		ContainerName: getCNIPodName(c),
 	}
 	opts.PortMappings = c.convertPortMappings()
-	eth, exists := c.state.NetInterfaceDescriptions.getInterfaceByName(netName)
-	if !exists {
-		return errors.Errorf("no network interface name for container %s on network %s", c.config.ID, netName)
-	}
 	opts.Networks = map[string]types.PerNetworkOptions{
-		netName: {
-			InterfaceName: eth,
-		},
+		netName: networks[netName],
 	}
 
 	if err := c.runtime.teardownNetwork(c.state.NetNS.Path(), opts); err != nil {
@@ -1269,6 +1256,7 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 	}
 
 	// update network status if container is running
+	oldStatus, statusExist := networkStatus[netName]
 	delete(networkStatus, netName)
 	c.state.NetworkStatus = networkStatus
 	err = c.save()
@@ -1279,13 +1267,31 @@ func (c *Container) NetworkDisconnect(nameOrID, netName string, force bool) erro
 	// Reload ports when there are still connected networks, maybe we removed the network interface with the child ip.
 	// Reloading without connected networks does not make sense, so we can skip this step.
 	if rootless.IsRootless() && len(networkStatus) > 0 {
-		return c.reloadRootlessRLKPortMapping()
+		if err := c.reloadRootlessRLKPortMapping(); err != nil {
+			return err
+		}
 	}
+
+	// Update resolv.conf if required
+	if statusExist {
+		stringIPs := make([]string, 0, len(oldStatus.DNSServerIPs))
+		for _, ip := range oldStatus.DNSServerIPs {
+			stringIPs = append(stringIPs, ip.String())
+		}
+		if len(stringIPs) == 0 {
+			return nil
+		}
+		logrus.Debugf("Removing DNS Servers %v from resolv.conf", stringIPs)
+		if err := c.removeNameserver(stringIPs); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // ConnectNetwork connects a container to a given network
-func (c *Container) NetworkConnect(nameOrID, netName string, aliases []string) error {
+func (c *Container) NetworkConnect(nameOrID, netName string, netOpts types.PerNetworkOptions) error {
 	// only the bridge mode supports cni networks
 	if err := isBridgeNetMode(c.config.NetMode); err != nil {
 		return err
@@ -1294,7 +1300,7 @@ func (c *Container) NetworkConnect(nameOrID, netName string, aliases []string) e
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	networks, err := c.networksByNameIndex()
+	networks, err := c.networks()
 	if err != nil {
 		return err
 	}
@@ -1313,15 +1319,17 @@ func (c *Container) NetworkConnect(nameOrID, netName string, aliases []string) e
 	// get network status before we connect
 	networkStatus := c.getNetworkStatus()
 
-	network, err := c.runtime.network.NetworkInspect(netName)
-	if err != nil {
-		return err
-	}
-	if !network.DNSEnabled && len(aliases) > 0 {
-		return errors.Wrapf(define.ErrInvalidArg, "cannot set network aliases for network %q because dns is disabled", netName)
+	// always add the short id as alias for docker compat
+	netOpts.Aliases = append(netOpts.Aliases, c.config.ID[:12])
+
+	if netOpts.InterfaceName == "" {
+		netOpts.InterfaceName = getFreeInterfaceName(networks)
+		if netOpts.InterfaceName == "" {
+			return errors.New("could not find free network interface name")
+		}
 	}
 
-	if err := c.runtime.state.NetworkConnect(c, netName, aliases); err != nil {
+	if err := c.runtime.state.NetworkConnect(c, netName, netOpts); err != nil {
 		return err
 	}
 	c.newNetworkEvent(events.NetworkConnect, netName)
@@ -1332,30 +1340,13 @@ func (c *Container) NetworkConnect(nameOrID, netName string, aliases []string) e
 		return errors.Wrapf(define.ErrNoNetwork, "unable to connect %s to %s", nameOrID, netName)
 	}
 
-	ctrNetworks, _, err := c.networks()
-	if err != nil {
-		return err
-	}
-	// Update network descriptions
-	if err := c.setupNetworkDescriptions(ctrNetworks); err != nil {
-		return err
-	}
-
 	opts := types.NetworkOptions{
 		ContainerID:   c.config.ID,
 		ContainerName: getCNIPodName(c),
 	}
 	opts.PortMappings = c.convertPortMappings()
-	eth, exists := c.state.NetInterfaceDescriptions.getInterfaceByName(netName)
-	if !exists {
-		return errors.Errorf("no network interface name for container %s on network %s", c.config.ID, netName)
-	}
-	aliases = append(aliases, c.config.ID[:12])
 	opts.Networks = map[string]types.PerNetworkOptions{
-		netName: {
-			Aliases:       aliases,
-			InterfaceName: eth,
-		},
+		netName: netOpts,
 	}
 
 	results, err := c.runtime.setUpNetwork(c.state.NetNS.Path(), opts)
@@ -1377,12 +1368,53 @@ func (c *Container) NetworkConnect(nameOrID, netName string, aliases []string) e
 	if err != nil {
 		return err
 	}
+
 	// The first network needs a port reload to set the correct child ip for the rootlessport process.
 	// Adding a second network does not require a port reload because the child ip is still valid.
 	if rootless.IsRootless() && len(networks) == 0 {
-		return c.reloadRootlessRLKPortMapping()
+		if err := c.reloadRootlessRLKPortMapping(); err != nil {
+			return err
+		}
 	}
+
+	ipv6, err := c.checkForIPv6(networkStatus)
+	if err != nil {
+		return err
+	}
+
+	// Update resolv.conf if required
+	stringIPs := make([]string, 0, len(results[netName].DNSServerIPs))
+	for _, ip := range results[netName].DNSServerIPs {
+		if (ip.To4() == nil) && !ipv6 {
+			continue
+		}
+		stringIPs = append(stringIPs, ip.String())
+	}
+	if len(stringIPs) == 0 {
+		return nil
+	}
+	logrus.Debugf("Adding DNS Servers %v to resolv.conf", stringIPs)
+	if err := c.addNameserver(stringIPs); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// get a free interface name for a new network
+// return an empty string if no free name was found
+func getFreeInterfaceName(networks map[string]types.PerNetworkOptions) string {
+	ifNames := make([]string, 0, len(networks))
+	for _, opts := range networks {
+		ifNames = append(ifNames, opts.InterfaceName)
+	}
+	for i := 0; i < 100000; i++ {
+		ifName := fmt.Sprintf("eth%d", i)
+		if !util.StringInSlice(ifName, ifNames) {
+			return ifName
+		}
+	}
+	return ""
 }
 
 // DisconnectContainerFromNetwork removes a container from its CNI network
@@ -1395,12 +1427,12 @@ func (r *Runtime) DisconnectContainerFromNetwork(nameOrID, netName string, force
 }
 
 // ConnectContainerToNetwork connects a container to a CNI network
-func (r *Runtime) ConnectContainerToNetwork(nameOrID, netName string, aliases []string) error {
+func (r *Runtime) ConnectContainerToNetwork(nameOrID, netName string, netOpts types.PerNetworkOptions) error {
 	ctr, err := r.LookupContainer(nameOrID)
 	if err != nil {
 		return err
 	}
-	return ctr.NetworkConnect(nameOrID, netName, aliases)
+	return ctr.NetworkConnect(nameOrID, netName, netOpts)
 }
 
 // normalizeNetworkName takes a network name, a partial or a full network ID and returns the network name.

@@ -2,10 +2,10 @@ package utils
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v4/libpod/define"
 	"github.com/containers/storage/pkg/archive"
 	"github.com/godbus/dbus/v5"
 	"github.com/pkg/errors"
@@ -174,7 +174,7 @@ func RunsOnSystemd() bool {
 	return runsOnSystemd
 }
 
-func moveProcessToScope(pidPath, slice, scope string) error {
+func moveProcessPIDFileToScope(pidPath, slice, scope string) error {
 	data, err := ioutil.ReadFile(pidPath)
 	if err != nil {
 		// do not raise an error if the file doesn't exist
@@ -187,16 +187,30 @@ func moveProcessToScope(pidPath, slice, scope string) error {
 	if err != nil {
 		return errors.Wrapf(err, "cannot parse pid file %s", pidPath)
 	}
-	err = RunUnderSystemdScope(int(pid), slice, scope)
 
+	return moveProcessToScope(int(pid), slice, scope)
+}
+
+func moveProcessToScope(pid int, slice, scope string) error {
+	err := RunUnderSystemdScope(int(pid), slice, scope)
 	// If the PID is not valid anymore, do not return an error.
 	if dbusErr, ok := err.(dbus.Error); ok {
 		if dbusErr.Name == "org.freedesktop.DBus.Error.UnixProcessIdUnknown" {
 			return nil
 		}
 	}
-
 	return err
+}
+
+// MoveRootlessNetnsSlirpProcessToUserSlice moves the slirp4netns process for the rootless netns
+// into a different scope so that systemd does not kill it with a container.
+func MoveRootlessNetnsSlirpProcessToUserSlice(pid int) error {
+	randBytes := make([]byte, 4)
+	_, err := rand.Read(randBytes)
+	if err != nil {
+		return err
+	}
+	return moveProcessToScope(pid, "user.slice", fmt.Sprintf("rootless-netns-%x.scope", randBytes))
 }
 
 // MovePauseProcessToScope moves the pause process used for rootless mode to keep the namespaces alive to
@@ -204,9 +218,14 @@ func moveProcessToScope(pidPath, slice, scope string) error {
 func MovePauseProcessToScope(pausePidPath string) {
 	var err error
 
-	for i := 0; i < 3; i++ {
-		r := rand.Int()
-		err = moveProcessToScope(pausePidPath, "user.slice", fmt.Sprintf("podman-pause-%d.scope", r))
+	for i := 0; i < 10; i++ {
+		randBytes := make([]byte, 4)
+		_, err = rand.Read(randBytes)
+		if err != nil {
+			logrus.Errorf("failed to read random bytes: %v", err)
+			continue
+		}
+		err = moveProcessPIDFileToScope(pausePidPath, "user.slice", fmt.Sprintf("podman-pause-%x.scope", randBytes))
 		if err == nil {
 			return
 		}
@@ -223,4 +242,28 @@ func MovePauseProcessToScope(pausePidPath string) {
 			logrus.Debugf("Failed to add pause process to systemd sandbox cgroup: %v", err)
 		}
 	}
+}
+
+// CreateSCPCommand takes an existing command, appends the given arguments and returns a configured podman command for image scp
+func CreateSCPCommand(cmd *exec.Cmd, command []string) *exec.Cmd {
+	cmd.Args = append(cmd.Args, command...)
+	cmd.Env = os.Environ()
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	return cmd
+}
+
+// LoginUser starts the user process on the host so that image scp can use systemd-run
+func LoginUser(user string) (*exec.Cmd, error) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		return nil, err
+	}
+	machinectl, err := exec.LookPath("machinectl")
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(machinectl, "shell", "-q", user+"@.host", sleep, "inf")
+	err = cmd.Start()
+	return cmd, err
 }

@@ -10,15 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"reflect"
 	"strconv"
 	"time"
 
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/bindings"
-	sig "github.com/containers/podman/v3/pkg/signal"
-	"github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/utils"
 	"github.com/moby/term"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -94,7 +92,8 @@ func Attach(ctx context.Context, nameOrID string, stdin io.Reader, stdout io.Wri
 
 	// Unless all requirements are met, don't use "stdin" is a terminal
 	file, ok := stdin.(*os.File)
-	needTTY := ok && terminal.IsTerminal(int(file.Fd())) && ctnr.Config.Tty
+	outFile, outOk := stdout.(*os.File)
+	needTTY := ok && outOk && terminal.IsTerminal(int(file.Fd())) && ctnr.Config.Tty
 	if needTTY {
 		state, err := setRawTerminal(file)
 		if err != nil {
@@ -108,9 +107,9 @@ func Attach(ctx context.Context, nameOrID string, stdin io.Reader, stdout io.Wri
 		}()
 	}
 
-	headers := make(map[string]string)
-	headers["Connection"] = "Upgrade"
-	headers["Upgrade"] = "tcp"
+	headers := make(http.Header)
+	headers.Add("Connection", "Upgrade")
+	headers.Add("Upgrade", "tcp")
 
 	var socket net.Conn
 	socketSet := false
@@ -142,11 +141,10 @@ func Attach(ctx context.Context, nameOrID string, stdin io.Reader, stdout io.Wri
 
 	if needTTY {
 		winChange := make(chan os.Signal, 1)
-		signal.Notify(winChange, sig.SIGWINCH)
 		winCtx, winCancel := context.WithCancel(ctx)
 		defer winCancel()
-
-		attachHandleResize(ctx, winCtx, winChange, false, nameOrID, file)
+		notifyWinChange(winCtx, winChange, file, outFile)
+		attachHandleResize(ctx, winCtx, winChange, false, nameOrID, file, outFile)
 	}
 
 	// If we are attaching around a start, we need to "signal"
@@ -157,7 +155,7 @@ func Attach(ctx context.Context, nameOrID string, stdin io.Reader, stdout io.Wri
 	}
 
 	stdoutChan := make(chan error)
-	stdinChan := make(chan error, 1) //stdin channel should not block
+	stdinChan := make(chan error, 1) // stdin channel should not block
 
 	if isSet.stdin {
 		go func() {
@@ -345,9 +343,9 @@ func (f *rawFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 // This is intended to not be run as a goroutine, handling resizing for a container
 // or exec session. It will call resize once and then starts a goroutine which calls resize on winChange
-func attachHandleResize(ctx, winCtx context.Context, winChange chan os.Signal, isExec bool, id string, file *os.File) {
+func attachHandleResize(ctx, winCtx context.Context, winChange chan os.Signal, isExec bool, id string, file *os.File, outFile *os.File) {
 	resize := func() {
-		w, h, err := terminal.GetSize(int(file.Fd()))
+		w, h, err := getTermSize(file, outFile)
 		if err != nil {
 			logrus.Warnf("Failed to obtain TTY size: %v", err)
 		}
@@ -379,7 +377,7 @@ func attachHandleResize(ctx, winCtx context.Context, winChange chan os.Signal, i
 
 // Configure the given terminal for raw mode
 func setRawTerminal(file *os.File) (*terminal.State, error) {
-	state, err := terminal.MakeRaw(int(file.Fd()))
+	state, err := makeRawTerm(file)
 	if err != nil {
 		return nil, err
 	}
@@ -402,6 +400,7 @@ func ExecStartAndAttach(ctx context.Context, sessionID string, options *ExecStar
 	// TODO: Make this configurable (can't use streams' InputStream as it's
 	// buffered)
 	terminalFile := os.Stdin
+	terminalOutFile := os.Stdout
 
 	logrus.Debugf("Starting & Attaching to exec session ID %q", sessionID)
 
@@ -447,7 +446,7 @@ func ExecStartAndAttach(ctx context.Context, sessionID string, options *ExecStar
 			}
 			logrus.SetFormatter(&logrus.TextFormatter{})
 		}()
-		w, h, err := terminal.GetSize(int(terminalFile.Fd()))
+		w, h, err := getTermSize(terminalFile, terminalOutFile)
 		if err != nil {
 			logrus.Warnf("Failed to obtain TTY size: %v", err)
 		}
@@ -490,11 +489,11 @@ func ExecStartAndAttach(ctx context.Context, sessionID string, options *ExecStar
 
 	if needTTY {
 		winChange := make(chan os.Signal, 1)
-		signal.Notify(winChange, sig.SIGWINCH)
 		winCtx, winCancel := context.WithCancel(ctx)
 		defer winCancel()
 
-		attachHandleResize(ctx, winCtx, winChange, true, sessionID, terminalFile)
+		notifyWinChange(winCtx, winChange, terminalFile, terminalOutFile)
+		attachHandleResize(ctx, winCtx, winChange, true, sessionID, terminalFile, terminalOutFile)
 	}
 
 	if options.GetAttachInput() {

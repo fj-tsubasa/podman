@@ -1,10 +1,10 @@
 package swagger
 
 import (
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/inspect"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/inspect"
 	"github.com/docker/docker/api/types"
 )
 
@@ -109,6 +109,13 @@ type swagLibpodInspectImageResponse struct {
 	Body struct {
 		inspect.ImageData
 	}
+}
+
+// Rm containers
+// swagger:response DocsLibpodContainerRmReport
+type swagLibpodContainerRmReport struct {
+	// in: body
+	Body []handlers.LibpodContainersRmReport
 }
 
 // Prune containers

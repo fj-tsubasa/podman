@@ -1,4 +1,6 @@
-import configparser
+"""
+Helpers for integration tests using DockerClient
+"""
 import json
 import os
 import pathlib
@@ -11,7 +13,7 @@ from docker import DockerClient
 from .compat import constant
 
 
-class Podman(object):
+class PodmanAPI:
     """
     Instances hold the configuration and setup for running podman commands
     """
@@ -42,25 +44,24 @@ class Podman(object):
         os.environ["CONTAINERS_REGISTRIES_CONF"] = os.path.join(
             self.anchor_directory, "registry.conf"
         )
-        p = configparser.ConfigParser()
-        p.read_dict(
-            {
-                "registries.search": {"registries": "['quay.io', 'docker.io']"},
-                "registries.insecure": {"registries": "[]"},
-                "registries.block": {"registries": "[]"},
-            }
-        )
-        with open(os.environ["CONTAINERS_REGISTRIES_CONF"], "w") as w:
-            p.write(w)
+        conf = """unqualified-search-registries = ["docker.io", "quay.io"]
 
-        os.environ["CNI_CONFIG_PATH"] = os.path.join(
-            self.anchor_directory, "cni", "net.d"
-        )
+[[registry]]
+location="localhost:5000"
+insecure=true
+
+[[registry.mirror]]
+location = "mirror.localhost:5000"
+
+"""
+
+        with open(os.environ["CONTAINERS_REGISTRIES_CONF"], "w") as file:
+            file.write(conf)
+
+        os.environ["CNI_CONFIG_PATH"] = os.path.join(self.anchor_directory, "cni", "net.d")
         os.makedirs(os.environ["CNI_CONFIG_PATH"], exist_ok=True)
-        self.cmd.append("--cni-config-dir=" + os.environ["CNI_CONFIG_PATH"])
-        cni_cfg = os.path.join(
-            os.environ["CNI_CONFIG_PATH"], "87-podman-bridge.conflist"
-        )
+        self.cmd.append("--network-config-dir=" + os.environ["CNI_CONFIG_PATH"])
+        cni_cfg = os.path.join(os.environ["CNI_CONFIG_PATH"], "87-podman-bridge.conflist")
         # json decoded and encoded to ensure legal json
         buf = json.loads(
             """
@@ -90,8 +91,8 @@ class Podman(object):
             }
             """
         )
-        with open(cni_cfg, "w") as w:
-            json.dump(buf, w)
+        with open(cni_cfg, "w") as file:
+            json.dump(buf, file)
 
     def open(self, command, *args, **kwargs):
         """Podman initialized instance to run a given command
@@ -108,6 +109,7 @@ class Podman(object):
 
         shell = kwargs.get("shell", False)
 
+        # pylint: disable=consider-using-with
         return subprocess.Popen(
             cmd,
             shell=shell,
@@ -141,9 +143,11 @@ class Podman(object):
         )
 
     def tear_down(self):
+        """Delete test environment."""
         shutil.rmtree(self.anchor_directory, ignore_errors=True)
 
     def restore_image_from_cache(self, client: DockerClient):
+        """Populate images from cache."""
         path = os.path.join(self.image_cache, constant.ALPINE_TARBALL)
         if not os.path.exists(path):
             img = client.images.pull(constant.ALPINE)
@@ -154,5 +158,6 @@ class Podman(object):
             self.run("load", "-i", path, check=True)
 
     def flush_image_cache(self):
-        for f in pathlib.Path(self.image_cache).glob("*.tar"):
-            f.unlink(f)
+        """Delete image cache."""
+        for file in pathlib.Path(self.image_cache).glob("*.tar"):
+            file.unlink(missing_ok=True)

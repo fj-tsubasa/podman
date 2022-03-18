@@ -4,17 +4,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/network"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 )
 
 // GeneratePodFilterFunc takes a filter and filtervalue (key, value)
 // and generates a libpod function that can be used to filter
 // pods
-func GeneratePodFilterFunc(filter string, filterValues []string) (
+func GeneratePodFilterFunc(filter string, filterValues []string, r *libpod.Runtime) (
 	func(pod *libpod.Pod) bool, error) {
 	switch filter {
 	case "ctr-ids":
@@ -128,24 +127,29 @@ func GeneratePodFilterFunc(filter string, filterValues []string) (
 			return false
 		}, nil
 	case "network":
+		var inputNetNames []string
+		for _, val := range filterValues {
+			net, err := r.Network().NetworkInspect(val)
+			if err != nil {
+				// ignore not found errors
+				break
+			}
+			inputNetNames = append(inputNetNames, net.Name)
+		}
 		return func(p *libpod.Pod) bool {
 			infra, err := p.InfraContainer()
 			// no infra, quick out
 			if err != nil {
 				return false
 			}
-			networks, _, err := infra.Networks()
+			networks, err := infra.Networks()
 			// if err or no networks, quick out
 			if err != nil || len(networks) == 0 {
 				return false
 			}
 			for _, net := range networks {
-				netID := network.GetNetworkID(net)
-				for _, val := range filterValues {
-					// match by network name or id
-					if val == net || val == netID {
-						return true
-					}
+				if util.StringInSlice(net, inputNetNames) {
+					return true
 				}
 			}
 			return false

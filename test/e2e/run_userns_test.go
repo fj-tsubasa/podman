@@ -7,7 +7,7 @@ import (
 	"os/user"
 	"strings"
 
-	. "github.com/containers/podman/v3/test/utils"
+	. "github.com/containers/podman/v4/test/utils"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gexec"
@@ -300,6 +300,35 @@ var _ = Describe("Podman UserNS support", func() {
 			inspectGID.WaitWithDefaultTimeout()
 			Expect(inspectGID).Should(Exit(0))
 			Expect(inspectGID.OutputToString()).To(Equal(tt.gid))
+		}
+
+	})
+	It("podman PODMAN_USERNS", func() {
+		SkipIfNotRootless("keep-id only works in rootless mode")
+
+		podmanUserns, podmanUserusSet := os.LookupEnv("PODMAN_USERNS")
+		os.Setenv("PODMAN_USERNS", "keep-id")
+		defer func() {
+			if podmanUserusSet {
+				os.Setenv("PODMAN_USERNS", podmanUserns)
+			} else {
+				os.Unsetenv("PODMAN_USERNS")
+			}
+		}()
+		if IsRemote() {
+			podmanTest.RestartRemoteService()
+		}
+
+		result := podmanTest.Podman([]string{"create", ALPINE, "true"})
+		result.WaitWithDefaultTimeout()
+		Expect(result).Should(Exit(0))
+
+		inspect := podmanTest.Podman([]string{"inspect", "--format", "{{ .HostConfig.IDMappings }}", result.OutputToString()})
+		inspect.WaitWithDefaultTimeout()
+		Expect(inspect.OutputToString()).To(Not(Equal("<nil>")))
+
+		if IsRemote() {
+			podmanTest.RestartRemoteService()
 		}
 	})
 })

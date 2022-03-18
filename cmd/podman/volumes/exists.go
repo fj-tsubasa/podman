@@ -1,8 +1,8 @@
 package volumes
 
 import (
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -10,7 +10,7 @@ var (
 	volumeExistsDescription = `If the given volume exists, podman volume exists exits with 0, otherwise the exit code will be 1.`
 	volumeExistsCommand     = &cobra.Command{
 		Use:               "exists VOLUME",
-		Short:             "volume exists",
+		Short:             "Volume exists",
 		Long:              volumeExistsDescription,
 		RunE:              volumeExists,
 		Example:           `podman volume exists myvol`,

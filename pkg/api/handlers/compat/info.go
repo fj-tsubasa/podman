@@ -11,12 +11,13 @@ import (
 
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/common/pkg/sysinfo"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/image/v5/pkg/sysregistriesv2"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/rootless"
 	docker "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/swarm"
@@ -32,18 +33,18 @@ func GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	infoData, err := runtime.Info()
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain system memory info"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain system memory info"))
 		return
 	}
 
 	configInfo, err := runtime.GetConfig()
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain runtime config"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain runtime config"))
 		return
 	}
 	versionInfo, err := define.GetVersion()
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain podman versions"))
+		utils.Error(w, http.StatusInternalServerError, errors.Wrapf(err, "failed to obtain podman versions"))
 		return
 	}
 	stateInfo := getContainersState(runtime)
@@ -84,7 +85,6 @@ func GetInfo(w http.ResponseWriter, r *http.Request) {
 		InitBinary:         "",
 		InitCommit:         docker.Commit{},
 		Isolation:          "",
-		KernelMemory:       sysInfo.KernelMemory,
 		KernelMemoryTCP:    false,
 		KernelVersion:      infoData.Host.Kernel,
 		Labels:             nil,
@@ -109,7 +109,7 @@ func GetInfo(w http.ResponseWriter, r *http.Request) {
 			Log:     infoData.Plugins.Log,
 		},
 		ProductLicense:  "Apache-2.0",
-		RegistryConfig:  new(registry.ServiceConfig),
+		RegistryConfig:  getServiceConfig(runtime),
 		RuncCommit:      docker.Commit{},
 		Runtimes:        getRuntimes(configInfo),
 		SecurityOptions: getSecOpts(sysInfo),
@@ -125,13 +125,44 @@ func GetInfo(w http.ResponseWriter, r *http.Request) {
 		BuildahVersion:     infoData.Host.BuildahVersion,
 		CPURealtimePeriod:  sysInfo.CPURealtimePeriod,
 		CPURealtimeRuntime: sysInfo.CPURealtimeRuntime,
-		CgroupVersion:      strings.TrimPrefix(infoData.Host.CGroupsVersion, "v"),
+		CgroupVersion:      strings.TrimPrefix(infoData.Host.CgroupsVersion, "v"),
 		Rootless:           rootless.IsRootless(),
 		SwapFree:           infoData.Host.SwapFree,
 		SwapTotal:          infoData.Host.SwapTotal,
 		Uptime:             infoData.Host.Uptime,
 	}
 	utils.WriteResponse(w, http.StatusOK, info)
+}
+
+func getServiceConfig(runtime *libpod.Runtime) *registry.ServiceConfig {
+	var indexConfs map[string]*registry.IndexInfo
+
+	regs, err := sysregistriesv2.GetRegistries(runtime.SystemContext())
+	if err == nil {
+		indexConfs = make(map[string]*registry.IndexInfo, len(regs))
+		for _, reg := range regs {
+			mirrors := make([]string, len(reg.Mirrors))
+			for i, mirror := range reg.Mirrors {
+				mirrors[i] = mirror.Location
+			}
+			indexConfs[reg.Prefix] = &registry.IndexInfo{
+				Name:    reg.Prefix,
+				Mirrors: mirrors,
+				Secure:  !reg.Insecure,
+			}
+		}
+	} else {
+		log.Warnf("failed to get registries configuration: %v", err)
+		indexConfs = make(map[string]*registry.IndexInfo)
+	}
+
+	return &registry.ServiceConfig{
+		AllowNondistributableArtifactsCIDRs:     make([]*registry.NetIPNet, 0),
+		AllowNondistributableArtifactsHostnames: make([]string, 0),
+		InsecureRegistryCIDRs:                   make([]*registry.NetIPNet, 0),
+		IndexConfigs:                            indexConfs,
+		Mirrors:                                 make([]string, 0),
+	}
 }
 
 func getGraphStatus(storeInfo map[string]string) [][2]string {

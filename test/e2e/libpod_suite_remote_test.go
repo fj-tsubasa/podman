@@ -1,3 +1,4 @@
+//go:build remote
 // +build remote
 
 package integration
@@ -15,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/rootless"
 )
 
 func IsRemote() bool {
@@ -79,7 +80,7 @@ func (p *PodmanTestIntegration) StartRemoteService() {
 
 	args := []string{}
 	if _, found := os.LookupEnv("DEBUG_SERVICE"); found {
-		args = append(args, "--log-level", "debug")
+		args = append(args, "--log-level", "trace")
 	}
 	remoteSocket := p.RemoteSocket
 	args = append(args, "system", "service", "--time", "0", remoteSocket)
@@ -143,12 +144,18 @@ func (p *PodmanTestIntegration) StopRemoteService() {
 	if err := os.Remove(socket); err != nil {
 		fmt.Println(err)
 	}
+	if p.RemoteSocketLock != "" {
+		if err := os.Remove(p.RemoteSocketLock); err != nil {
+			fmt.Println(err)
+		}
+	}
 }
 
-//MakeOptions assembles all the podman main options
+// MakeOptions assembles all the podman main options
 func getRemoteOptions(p *PodmanTestIntegration, args []string) []string {
-	podmanOptions := strings.Split(fmt.Sprintf("--root %s --runroot %s --runtime %s --conmon %s --cni-config-dir %s --cgroup-manager %s",
-		p.Root, p.RunRoot, p.OCIRuntime, p.ConmonBinary, p.CNIConfigDir, p.CgroupManager), " ")
+	networkDir := p.NetworkConfigDir
+	podmanOptions := strings.Split(fmt.Sprintf("--root %s --runroot %s --runtime %s --conmon %s --network-config-dir %s --cgroup-manager %s",
+		p.Root, p.RunRoot, p.OCIRuntime, p.ConmonBinary, networkDir, p.CgroupManager), " ")
 	if os.Getenv("HOOK_OPTION") != "" {
 		podmanOptions = append(podmanOptions, os.Getenv("HOOK_OPTION"))
 	}

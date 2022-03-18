@@ -7,16 +7,15 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/pkg/sysregistriesv2"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/network"
-	"github.com/containers/podman/v3/pkg/rootless"
-	systemdDefine "github.com/containers/podman/v3/pkg/systemd/define"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/rootless"
+	systemdDefine "github.com/containers/podman/v4/pkg/systemd/define"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/spf13/cobra"
 )
 
@@ -209,7 +208,7 @@ func getImages(cmd *cobra.Command, toComplete string) ([]string, cobra.ShellComp
 	return suggestions, cobra.ShellCompDirectiveNoFileComp
 }
 
-func getSecrets(cmd *cobra.Command, toComplete string) ([]string, cobra.ShellCompDirective) {
+func getSecrets(cmd *cobra.Command, toComplete string, cType completeType) ([]string, cobra.ShellCompDirective) {
 	suggestions := []string{}
 
 	engine, err := setupContainerEngine(cmd)
@@ -224,7 +223,13 @@ func getSecrets(cmd *cobra.Command, toComplete string) ([]string, cobra.ShellCom
 	}
 
 	for _, s := range secrets {
-		if strings.HasPrefix(s.Spec.Name, toComplete) {
+		// works the same as in getNetworks
+		if ((len(toComplete) > 1 && cType == completeDefault) ||
+			cType == completeIDs) && strings.HasPrefix(s.ID, toComplete) {
+			suggestions = append(suggestions, s.ID[0:12])
+		}
+		// include name in suggestions
+		if cType != completeIDs && strings.HasPrefix(s.Spec.Name, toComplete) {
 			suggestions = append(suggestions, s.Spec.Name)
 		}
 	}
@@ -256,12 +261,11 @@ func getNetworks(cmd *cobra.Command, toComplete string, cType completeType) ([]s
 	}
 
 	for _, n := range networks {
-		id := network.GetNetworkID(n.Name)
 		// include ids in suggestions if cType == completeIDs or
 		// more then 2 chars are typed and cType == completeDefault
 		if ((len(toComplete) > 1 && cType == completeDefault) ||
-			cType == completeIDs) && strings.HasPrefix(id, toComplete) {
-			suggestions = append(suggestions, id[0:12])
+			cType == completeIDs) && strings.HasPrefix(n.ID, toComplete) {
+			suggestions = append(suggestions, n.ID[0:12])
 		}
 		// include name in suggestions
 		if cType != completeIDs && strings.HasPrefix(n.Name, toComplete) {
@@ -470,7 +474,7 @@ func AutocompleteSecrets(cmd *cobra.Command, args []string, toComplete string) (
 	if !validCurrentCmdLine(cmd, args, toComplete) {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return getSecrets(cmd, toComplete)
+	return getSecrets(cmd, toComplete, completeDefault)
 }
 
 func AutocompleteSecretCreate(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -1283,6 +1287,15 @@ func AutocompleteVolumeFilters(cmd *cobra.Command, args []string, toComplete str
 	return completeKeyValues(toComplete, kv)
 }
 
+// AutocompleteSecretFilters - Autocomplete secret ls --filter options.
+func AutocompleteSecretFilters(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	kv := keyValueCompletion{
+		"name=": func(s string) ([]string, cobra.ShellCompDirective) { return getSecrets(cmd, s, completeNames) },
+		"id=":   func(s string) ([]string, cobra.ShellCompDirective) { return getSecrets(cmd, s, completeIDs) },
+	}
+	return completeKeyValues(toComplete, kv)
+}
+
 // AutocompleteCheckpointCompressType - Autocomplete checkpoint compress type options.
 // -> "gzip", "none", "zstd"
 func AutocompleteCheckpointCompressType(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -1294,4 +1307,18 @@ func AutocompleteCheckpointCompressType(cmd *cobra.Command, args []string, toCom
 func AutocompleteCompressionFormat(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	types := []string{"gzip", "zstd", "zstd:chunked"}
 	return types, cobra.ShellCompDirectiveNoFileComp
+}
+
+// AutocompleteClone - Autocomplete container and image names
+func AutocompleteClone(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if !validCurrentCmdLine(cmd, args, toComplete) {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	switch len(args) {
+	case 0:
+		return getContainers(cmd, toComplete, completeDefault)
+	case 2:
+		return getImages(cmd, toComplete)
+	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }

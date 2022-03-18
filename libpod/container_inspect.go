@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/driver"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/driver"
+	"github.com/containers/podman/v4/pkg/util"
+	"github.com/containers/storage/types"
 	units "github.com/docker/go-units"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
@@ -48,6 +49,17 @@ func (c *Container) Inspect(size bool) (*define.InspectContainerData, error) {
 	}
 
 	return c.inspectLocked(size)
+}
+
+func (c *Container) volumesFrom() ([]string, error) {
+	ctrSpec, err := c.specFromState()
+	if err != nil {
+		return nil, err
+	}
+	if ctrs, ok := ctrSpec.Annotations[define.InspectAnnotationVolumesFrom]; ok {
+		return strings.Split(ctrs, ","), nil
+	}
+	return nil, nil
 }
 
 func (c *Container) getContainerInspectData(size bool, driverData *define.DriverData) (*define.InspectContainerData, error) {
@@ -113,20 +125,26 @@ func (c *Container) getContainerInspectData(size bool, driverData *define.Driver
 		Path:    path,
 		Args:    args,
 		State: &define.InspectContainerState{
-			OciVersion:   ctrSpec.Version,
-			Status:       runtimeInfo.State.String(),
-			Running:      runtimeInfo.State == define.ContainerStateRunning,
-			Paused:       runtimeInfo.State == define.ContainerStatePaused,
-			OOMKilled:    runtimeInfo.OOMKilled,
-			Dead:         runtimeInfo.State.String() == "bad state",
-			Pid:          runtimeInfo.PID,
-			ConmonPid:    runtimeInfo.ConmonPID,
-			ExitCode:     runtimeInfo.ExitCode,
-			Error:        "", // can't get yet
-			StartedAt:    runtimeInfo.StartedTime,
-			FinishedAt:   runtimeInfo.FinishedTime,
-			Checkpointed: runtimeInfo.Checkpointed,
-			CgroupPath:   cgroupPath,
+			OciVersion:     ctrSpec.Version,
+			Status:         runtimeInfo.State.String(),
+			Running:        runtimeInfo.State == define.ContainerStateRunning,
+			Paused:         runtimeInfo.State == define.ContainerStatePaused,
+			OOMKilled:      runtimeInfo.OOMKilled,
+			Dead:           runtimeInfo.State.String() == "bad state",
+			Pid:            runtimeInfo.PID,
+			ConmonPid:      runtimeInfo.ConmonPID,
+			ExitCode:       runtimeInfo.ExitCode,
+			Error:          "", // can't get yet
+			StartedAt:      runtimeInfo.StartedTime,
+			FinishedAt:     runtimeInfo.FinishedTime,
+			Checkpointed:   runtimeInfo.Checkpointed,
+			CgroupPath:     cgroupPath,
+			RestoredAt:     runtimeInfo.RestoredTime,
+			CheckpointedAt: runtimeInfo.CheckpointedTime,
+			Restored:       runtimeInfo.Restored,
+			CheckpointPath: runtimeInfo.CheckpointPath,
+			CheckpointLog:  runtimeInfo.CheckpointLog,
+			RestoreLog:     runtimeInfo.RestoreLog,
 		},
 		Image:           config.RootfsImageID,
 		ImageName:       config.RootfsImageName,
@@ -267,6 +285,27 @@ func (c *Container) GetInspectMounts(namedVolumes []*ContainerNamedVolume, image
 	return inspectMounts, nil
 }
 
+// GetSecurityOptions retrieves and returns the security related annotations and process information upon inspection
+func (c *Container) GetSecurityOptions() []string {
+	ctrSpec := c.config.Spec
+	SecurityOpt := []string{}
+	if ctrSpec.Process != nil {
+		if ctrSpec.Process.NoNewPrivileges {
+			SecurityOpt = append(SecurityOpt, "no-new-privileges")
+		}
+	}
+	if label, ok := ctrSpec.Annotations[define.InspectAnnotationLabel]; ok {
+		SecurityOpt = append(SecurityOpt, fmt.Sprintf("label=%s", label))
+	}
+	if seccomp, ok := ctrSpec.Annotations[define.InspectAnnotationSeccomp]; ok {
+		SecurityOpt = append(SecurityOpt, fmt.Sprintf("seccomp=%s", seccomp))
+	}
+	if apparmor, ok := ctrSpec.Annotations[define.InspectAnnotationApparmor]; ok {
+		SecurityOpt = append(SecurityOpt, fmt.Sprintf("apparmor=%s", apparmor))
+	}
+	return SecurityOpt
+}
+
 // Parse mount options so we can populate them in the mount structure.
 // The mount passed in will be modified.
 func parseMountOptionsForInspect(options []string, mount *define.InspectMount) {
@@ -318,7 +357,7 @@ func (c *Container) generateInspectContainerConfig(spec *spec.Spec) *define.Insp
 	ctrConfig.Timeout = c.config.Timeout
 	ctrConfig.OpenStdin = c.config.Stdin
 	ctrConfig.Image = c.config.RootfsImageName
-	ctrConfig.SystemdMode = c.config.Systemd
+	ctrConfig.SystemdMode = c.Systemd()
 
 	// Leave empty is not explicitly overwritten by user
 	if len(c.config.Command) != 0 {
@@ -371,7 +410,21 @@ func (c *Container) generateInspectContainerConfig(spec *spec.Spec) *define.Insp
 		ctrConfig.Umask = c.config.Umask
 	}
 
+	ctrConfig.Passwd = c.config.Passwd
+	ctrConfig.ChrootDirs = append(ctrConfig.ChrootDirs, c.config.ChrootDirs...)
+
 	return ctrConfig
+}
+
+func generateIDMappings(idMappings types.IDMappingOptions) *define.InspectIDMappings {
+	var inspectMappings define.InspectIDMappings
+	for _, uid := range idMappings.UIDMap {
+		inspectMappings.UIDMap = append(inspectMappings.UIDMap, fmt.Sprintf("%d:%d:%d", uid.ContainerID, uid.HostID, uid.Size))
+	}
+	for _, gid := range idMappings.GIDMap {
+		inspectMappings.GIDMap = append(inspectMappings.GIDMap, fmt.Sprintf("%d:%d:%d", gid.ContainerID, gid.HostID, gid.Size))
+	}
+	return &inspectMappings
 }
 
 // Generate the InspectContainerHostConfig struct for the HostConfig field of
@@ -414,15 +467,13 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 	hostConfig.GroupAdd = make([]string, 0, len(c.config.Groups))
 	hostConfig.GroupAdd = append(hostConfig.GroupAdd, c.config.Groups...)
 
-	hostConfig.SecurityOpt = []string{}
 	if ctrSpec.Process != nil {
 		if ctrSpec.Process.OOMScoreAdj != nil {
 			hostConfig.OomScoreAdj = *ctrSpec.Process.OOMScoreAdj
 		}
-		if ctrSpec.Process.NoNewPrivileges {
-			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, "no-new-privileges")
-		}
 	}
+
+	hostConfig.SecurityOpt = c.GetSecurityOptions()
 
 	hostConfig.ReadonlyRootfs = ctrSpec.Root.Readonly
 	hostConfig.ShmSize = c.config.ShmSize
@@ -447,15 +498,6 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 		}
 		if ctrSpec.Annotations[define.InspectAnnotationInit] == define.InspectResponseTrue {
 			hostConfig.Init = true
-		}
-		if label, ok := ctrSpec.Annotations[define.InspectAnnotationLabel]; ok {
-			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, fmt.Sprintf("label=%s", label))
-		}
-		if seccomp, ok := ctrSpec.Annotations[define.InspectAnnotationSeccomp]; ok {
-			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, fmt.Sprintf("seccomp=%s", seccomp))
-		}
-		if apparmor, ok := ctrSpec.Annotations[define.InspectAnnotationApparmor]; ok {
-			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, fmt.Sprintf("apparmor=%s", apparmor))
 		}
 	}
 
@@ -484,9 +526,6 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 			if ctrSpec.Linux.Resources.Memory != nil {
 				if ctrSpec.Linux.Resources.Memory.Limit != nil {
 					hostConfig.Memory = *ctrSpec.Linux.Resources.Memory.Limit
-				}
-				if ctrSpec.Linux.Resources.Memory.Kernel != nil {
-					hostConfig.KernelMemory = *ctrSpec.Linux.Resources.Memory.Kernel
 				}
 				if ctrSpec.Linux.Resources.Memory.Reservation != nil {
 					hostConfig.MemoryReservation = *ctrSpec.Linux.Resources.Memory.Reservation
@@ -715,7 +754,7 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 	}
 	hostConfig.CgroupMode = cgroupMode
 
-	// CGroup parent
+	// Cgroup parent
 	// Need to check if it's the default, and not print if so.
 	defaultCgroupParent := ""
 	switch c.CgroupManager() {
@@ -800,7 +839,9 @@ func (c *Container) generateInspectContainerHostConfig(ctrSpec *spec.Spec, named
 		}
 	}
 	hostConfig.UsernsMode = usernsMode
-
+	if c.config.IDMappings.UIDMap != nil && c.config.IDMappings.GIDMap != nil {
+		hostConfig.IDMappings = generateIDMappings(c.config.IDMappings)
+	}
 	// Devices
 	// Do not include if privileged - assumed that all devices will be
 	// included.

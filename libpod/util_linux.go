@@ -8,8 +8,8 @@ import (
 	"syscall"
 
 	"github.com/containers/common/pkg/cgroups"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/opencontainers/selinux/go-selinux/label"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -43,7 +43,7 @@ func getDefaultSystemdCgroup() string {
 	return SystemdDefaultCgroupParent
 }
 
-// makeSystemdCgroup creates a systemd CGroup at the given location.
+// makeSystemdCgroup creates a systemd Cgroup at the given location.
 func makeSystemdCgroup(path string) error {
 	controller, err := cgroups.NewSystemd(getDefaultSystemdCgroup())
 	if err != nil {

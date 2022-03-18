@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,23 +13,24 @@ import (
 
 	buildahDefine "github.com/containers/buildah/define"
 	"github.com/containers/common/libimage"
+	nettypes "github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/autoupdate"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/specgen"
-	"github.com/containers/podman/v3/pkg/specgen/generate"
-	"github.com/containers/podman/v3/pkg/specgen/generate/kube"
-	"github.com/containers/podman/v3/pkg/specgenutil"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/autoupdate"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	v1apps "github.com/containers/podman/v4/pkg/k8s.io/api/apps/v1"
+	v1 "github.com/containers/podman/v4/pkg/k8s.io/api/core/v1"
+	"github.com/containers/podman/v4/pkg/specgen"
+	"github.com/containers/podman/v4/pkg/specgen/generate"
+	"github.com/containers/podman/v4/pkg/specgen/generate/kube"
+	"github.com/containers/podman/v4/pkg/specgenutil"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	yamlv3 "gopkg.in/yaml.v3"
-	v1apps "k8s.io/api/apps/v1"
-	v1 "k8s.io/api/core/v1"
+	yamlv2 "gopkg.in/yaml.v2"
 )
 
 func (ic *ContainerEngine) PlayKube(ctx context.Context, path string, options entities.PlayKubeOptions) (*entities.PlayKubeReport, error) {
@@ -78,6 +78,13 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, path string, options en
 
 			podTemplateSpec.ObjectMeta = podYAML.ObjectMeta
 			podTemplateSpec.Spec = podYAML.Spec
+
+			for name, val := range options.Annotations {
+				if podYAML.Annotations == nil {
+					podYAML.Annotations = make(map[string]string)
+				}
+				podYAML.Annotations[name] = val
+			}
 
 			r, err := ic.playKubePod(ctx, podTemplateSpec.ObjectMeta.Name, &podTemplateSpec, options, &ipIndex, podYAML.Annotations, configMaps)
 			if err != nil {
@@ -128,6 +135,9 @@ func (ic *ContainerEngine) PlayKube(ctx context.Context, path string, options en
 	}
 
 	if validKinds == 0 {
+		if len(configMaps) > 0 {
+			return nil, fmt.Errorf("ConfigMaps in podman are not a standalone object and must be used in a container")
+		}
 		return nil, fmt.Errorf("YAML document does not contain any supported kube kind")
 	}
 
@@ -178,51 +188,57 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		return nil, err
 	}
 
-	// check for name collision between pod and container
+	// Assert the pod has a name
 	if podName == "" {
 		return nil, errors.Errorf("pod does not have a name")
 	}
-	for _, n := range podYAML.Spec.Containers {
-		if n.Name == podName {
-			playKubePod.Logs = append(playKubePod.Logs,
-				fmt.Sprintf("a container exists with the same name (%q) as the pod in your YAML file; changing pod name to %s_pod\n", podName, podName))
-			podName = fmt.Sprintf("%s_pod", podName)
-		}
-	}
 
-	podOpt := entities.PodCreateOptions{Infra: true, Net: &entities.NetOptions{StaticIP: &net.IP{}, StaticMAC: &net.HardwareAddr{}, NoHosts: options.NoHosts}}
+	podOpt := entities.PodCreateOptions{Infra: true, Net: &entities.NetOptions{NoHosts: options.NoHosts}}
 	podOpt, err = kube.ToPodOpt(ctx, podName, podOpt, podYAML)
 	if err != nil {
 		return nil, err
 	}
 
-	if options.Network != "" {
-		ns, cniNets, netOpts, err := specgen.ParseNetworkString(options.Network)
-		if err != nil {
-			return nil, err
-		}
-
-		if (ns.IsBridge() && len(cniNets) == 0) || ns.IsHost() {
-			return nil, errors.Errorf("invalid value passed to --network: bridge or host networking must be configured in YAML")
-		}
-
-		podOpt.Net.Network = ns
-		if len(cniNets) > 0 {
-			podOpt.Net.CNINetworks = append(podOpt.Net.CNINetworks, cniNets...)
-		}
-		if len(netOpts) > 0 {
-			podOpt.Net.NetworkOptions = netOpts
-		}
+	ns, networks, netOpts, err := specgen.ParseNetworkFlag(options.Networks)
+	if err != nil {
+		return nil, err
 	}
 
+	if (ns.IsBridge() && len(networks) == 0) || ns.IsHost() {
+		return nil, errors.Errorf("invalid value passed to --network: bridge or host networking must be configured in YAML")
+	}
+
+	podOpt.Net.Network = ns
+	podOpt.Net.Networks = networks
+	podOpt.Net.NetworkOptions = netOpts
+
+	// FIXME This is very hard to support properly with a good ux
 	if len(options.StaticIPs) > *ipIndex {
-		podOpt.Net.StaticIP = &options.StaticIPs[*ipIndex]
+		if !podOpt.Net.Network.IsBridge() {
+			errors.Wrap(define.ErrInvalidArg, "static ip addresses can only be set when the network mode is bridge")
+		}
+		if len(podOpt.Net.Networks) != 1 {
+			return nil, errors.Wrap(define.ErrInvalidArg, "cannot set static ip addresses for more than network, use netname:ip=<ip> syntax to specify ips for more than network")
+		}
+		for name, netOpts := range podOpt.Net.Networks {
+			netOpts.StaticIPs = append(netOpts.StaticIPs, options.StaticIPs[*ipIndex])
+			podOpt.Net.Networks[name] = netOpts
+		}
 	} else if len(options.StaticIPs) > 0 {
 		// only warn if the user has set at least one ip
 		logrus.Warn("No more static ips left using a random one")
 	}
 	if len(options.StaticMACs) > *ipIndex {
-		podOpt.Net.StaticMAC = &options.StaticMACs[*ipIndex]
+		if !podOpt.Net.Network.IsBridge() {
+			errors.Wrap(define.ErrInvalidArg, "static mac address can only be set when the network mode is bridge")
+		}
+		if len(podOpt.Net.Networks) != 1 {
+			return nil, errors.Wrap(define.ErrInvalidArg, "cannot set static mac address for more than network, use netname:mac=<mac> syntax to specify mac for more than network")
+		}
+		for name, netOpts := range podOpt.Net.Networks {
+			netOpts.StaticMAC = nettypes.HardwareAddr(options.StaticMACs[*ipIndex])
+			podOpt.Net.Networks[name] = netOpts
+		}
 	} else if len(options.StaticIPs) > 0 {
 		// only warn if the user has set at least one mac
 		logrus.Warn("No more static macs left using a random one")
@@ -345,12 +361,24 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 
 	containers := make([]*libpod.Container, 0, len(podYAML.Spec.Containers))
 	initContainers := make([]*libpod.Container, 0, len(podYAML.Spec.InitContainers))
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
+
+	var cwd string
+	if options.ContextDir != "" {
+		cwd = options.ContextDir
+	} else {
+		cwd, err = os.Getwd()
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	ctrNames := make(map[string]string)
 	for _, initCtr := range podYAML.Spec.InitContainers {
+		// Error out if same name is used for more than one container
+		if _, ok := ctrNames[initCtr.Name]; ok {
+			return nil, errors.Errorf("the pod %q is invalid; duplicate container name %q detected", podName, initCtr.Name)
+		}
+		ctrNames[initCtr.Name] = ""
 		// Init containers cannot have either of lifecycle, livenessProbe, readinessProbe, or startupProbe set
 		if initCtr.Lifecycle != nil || initCtr.LivenessProbe != nil || initCtr.ReadinessProbe != nil || initCtr.StartupProbe != nil {
 			return nil, errors.Errorf("cannot create an init container that has either of lifecycle, livenessProbe, readinessProbe, or startupProbe set")
@@ -359,6 +387,11 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		if err != nil {
 			return nil, err
 		}
+
+		for k, v := range podSpec.PodSpecGen.Labels { // add podYAML labels
+			labels[k] = v
+		}
+
 		specgenOpts := kube.CtrSpecGenOptions{
 			Annotations:       annotations,
 			Container:         initCtr,
@@ -381,7 +414,7 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 		if err != nil {
 			return nil, err
 		}
-		rtSpec, spec, opts, err := generate.MakeContainer(ctx, ic.Libpod, specGen)
+		rtSpec, spec, opts, err := generate.MakeContainer(ctx, ic.Libpod, specGen, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -394,12 +427,22 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 	}
 	for _, container := range podYAML.Spec.Containers {
 		if !strings.Contains("infra", container.Name) {
+			// Error out if the same name is used for more than one container
+			if _, ok := ctrNames[container.Name]; ok {
+				return nil, errors.Errorf("the pod %q is invalid; duplicate container name %q detected", podName, container.Name)
+			}
+			ctrNames[container.Name] = ""
 			pulledImage, labels, err := ic.getImageAndLabelInfo(ctx, cwd, annotations, writer, container, options)
 			if err != nil {
 				return nil, err
 			}
 
+			for k, v := range podSpec.PodSpecGen.Labels { // add podYAML labels
+				labels[k] = v
+			}
+
 			specgenOpts := kube.CtrSpecGenOptions{
+				Annotations:    annotations,
 				Container:      container,
 				Image:          pulledImage,
 				Volumes:        volumes,
@@ -419,7 +462,8 @@ func (ic *ContainerEngine) playKubePod(ctx context.Context, podName string, podY
 			if err != nil {
 				return nil, err
 			}
-			rtSpec, spec, opts, err := generate.MakeContainer(ctx, ic.Libpod, specGen)
+			specGen.RawImageName = container.Image
+			rtSpec, spec, opts, err := generate.MakeContainer(ctx, ic.Libpod, specGen, false, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -470,7 +514,7 @@ func (ic *ContainerEngine) getImageAndLabelInfo(ctx context.Context, cwd string,
 	if err != nil {
 		return nil, nil, err
 	}
-	if (len(buildFile) > 0 && !existsLocally) || (len(buildFile) > 0 && options.Build) {
+	if (len(buildFile) > 0) && ((!existsLocally && options.Build != types.OptionalBoolFalse) || (options.Build == types.OptionalBoolTrue)) {
 		buildOpts := new(buildahDefine.BuildOptions)
 		commonOpts := new(buildahDefine.CommonBuildOptions)
 		buildOpts.ConfigureNetwork = buildahDefine.NetworkDefault
@@ -545,7 +589,7 @@ func (ic *ContainerEngine) playKubePVC(ctx context.Context, pvcYAML *v1.Persiste
 
 	// Get pvc name.
 	// This is the only required pvc attribute to create a podman volume.
-	name := pvcYAML.GetName()
+	name := pvcYAML.Name
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("persistent volume claim name can not be empty")
 	}
@@ -553,13 +597,13 @@ func (ic *ContainerEngine) playKubePVC(ctx context.Context, pvcYAML *v1.Persiste
 	// Create podman volume options.
 	volOptions := []libpod.VolumeCreateOption{
 		libpod.WithVolumeName(name),
-		libpod.WithVolumeLabels(pvcYAML.GetLabels()),
+		libpod.WithVolumeLabels(pvcYAML.Labels),
 	}
 
 	// Get pvc annotations and create remaining podman volume options if available.
 	// These are podman volume options that do not match any of the persistent volume claim
 	// attributes, so they can be configured using annotations since they will not affect k8s.
-	for k, v := range pvcYAML.GetAnnotations() {
+	for k, v := range pvcYAML.Annotations {
 		switch k {
 		case util.VolumeDriverAnnotation:
 			volOptions = append(volOptions, libpod.WithVolumeDriver(v))
@@ -625,7 +669,7 @@ func readConfigMapFromFile(r io.Reader) (v1.ConfigMap, error) {
 func splitMultiDocYAML(yamlContent []byte) ([][]byte, error) {
 	var documentList [][]byte
 
-	d := yamlv3.NewDecoder(bytes.NewReader(yamlContent))
+	d := yamlv2.NewDecoder(bytes.NewReader(yamlContent))
 	for {
 		var o interface{}
 		// read individual document
@@ -639,7 +683,7 @@ func splitMultiDocYAML(yamlContent []byte) ([][]byte, error) {
 
 		if o != nil {
 			// back to bytes
-			document, err := yamlv3.Marshal(o)
+			document, err := yamlv2.Marshal(o)
 			if err != nil {
 				return nil, errors.Wrapf(err, "individual doc yaml could not be marshalled")
 			}

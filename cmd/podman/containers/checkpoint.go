@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/completion"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/rootless"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/pkg/criu"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/rootless"
 	"github.com/containers/storage/pkg/archive"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -112,6 +113,9 @@ func checkpoint(cmd *cobra.Command, args []string) error {
 	}
 	if checkpointOptions.WithPrevious && checkpointOptions.PreCheckPoint {
 		return errors.Errorf("--with-previous can not be used with --pre-checkpoint")
+	}
+	if (checkpointOptions.WithPrevious || checkpointOptions.PreCheckPoint) && !criu.MemTrack() {
+		return errors.New("system (architecture/kernel/CRIU) does not support memory tracking")
 	}
 	responses, err := registry.ContainerEngine().ContainerCheckpoint(context.Background(), args, checkpointOptions)
 	if err != nil {

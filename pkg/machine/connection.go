@@ -1,4 +1,5 @@
-// +build amd64,!windows arm64,!windows
+//go:build amd64 || arm64
+// +build amd64 arm64
 
 package machine
 
@@ -35,6 +36,31 @@ func AddConnection(uri fmt.Stringer, name, identity string, isDefault bool) erro
 	} else {
 		cfg.Engine.ServiceDestinations[name] = dst
 	}
+	return cfg.Write()
+}
+
+func AnyConnectionDefault(name ...string) (bool, error) {
+	cfg, err := config.ReadCustomConfig()
+	if err != nil {
+		return false, err
+	}
+	for _, n := range name {
+		if n == cfg.Engine.ActiveService {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func ChangeDefault(name string) error {
+	cfg, err := config.ReadCustomConfig()
+	if err != nil {
+		return err
+	}
+
+	cfg.Engine.ActiveService = name
+
 	return cfg.Write()
 }
 

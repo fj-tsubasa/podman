@@ -3,11 +3,11 @@ package tunnel
 import (
 	"context"
 
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/bindings/network"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/errorhandling"
+	"github.com/containers/common/libnetwork/types"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/bindings/network"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/errorhandling"
 	"github.com/pkg/errors"
 )
 
@@ -81,8 +81,7 @@ func (ic *ContainerEngine) NetworkDisconnect(ctx context.Context, networkname st
 
 // NetworkConnect removes a container from a given network
 func (ic *ContainerEngine) NetworkConnect(ctx context.Context, networkname string, opts entities.NetworkConnectOptions) error {
-	options := new(network.ConnectOptions).WithAliases(opts.Aliases)
-	return network.Connect(ic.ClientCtx, networkname, opts.Container, options)
+	return network.Connect(ic.ClientCtx, networkname, opts.Container, &opts.PerNetworkOptions)
 }
 
 // NetworkExists checks if the given network exists

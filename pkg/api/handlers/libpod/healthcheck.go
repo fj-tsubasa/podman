@@ -3,10 +3,10 @@ package libpod
 import (
 	"net/http"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
 )
 
 func RunHealthCheck(w http.ResponseWriter, r *http.Request) {
@@ -19,11 +19,11 @@ func RunHealthCheck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if status == define.HealthCheckNotDefined {
-			utils.Error(w, "no healthcheck defined", http.StatusConflict, err)
+			utils.Error(w, http.StatusConflict, err)
 			return
 		}
 		if status == define.HealthCheckContainerStopped {
-			utils.Error(w, "container not running", http.StatusConflict, err)
+			utils.Error(w, http.StatusConflict, err)
 			return
 		}
 		utils.InternalServerError(w, err)

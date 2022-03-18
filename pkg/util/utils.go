@@ -17,10 +17,10 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/pkg/errorhandling"
-	"github.com/containers/podman/v3/pkg/namespaces"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/signal"
+	"github.com/containers/podman/v4/pkg/errorhandling"
+	"github.com/containers/podman/v4/pkg/namespaces"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/signal"
 	"github.com/containers/storage/pkg/idtools"
 	stypes "github.com/containers/storage/types"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -665,8 +665,8 @@ func CreateCidFile(cidfile string, id string) error {
 	return nil
 }
 
-// DefaultCPUPeriod is the default CPU period is 100us, which is the same default
-// as Kubernetes.
+// DefaultCPUPeriod is the default CPU period (100ms) in microseconds, which is
+// the same default as Kubernetes.
 const DefaultCPUPeriod uint64 = 100000
 
 // CoresToPeriodAndQuota converts a fraction of cores to the equivalent
@@ -722,4 +722,12 @@ func SocketPath() (string, error) {
 
 	// Glue the socket path together
 	return filepath.Join(xdg, "podman", "podman.sock"), nil
+}
+
+func LookupUser(name string) (*user.User, error) {
+	// Assume UID look up first, if it fails lookup by username
+	if u, err := user.LookupId(name); err == nil {
+		return u, err
+	}
+	return user.Lookup(name)
 }

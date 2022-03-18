@@ -3,12 +3,12 @@ package compat
 import (
 	"net/http"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/events"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/events"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/gorilla/schema"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
@@ -34,7 +34,7 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 		Stream: true,
 	}
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "failed to parse parameters", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
@@ -44,7 +44,7 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 
 	libpodFilters, err := util.FiltersFromRequest(r)
 	if err != nil {
-		utils.Error(w, "failed to parse parameters", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 	eventChannel := make(chan *events.Event)
@@ -91,6 +91,8 @@ func GetEvents(w http.ResponseWriter, r *http.Request) {
 			e := entities.ConvertToEntitiesEvent(*evt)
 			if !utils.IsLibpodRequest(r) && e.Status == "died" {
 				e.Status = "die"
+				e.Action = "die"
+				e.Actor.Attributes["exitCode"] = e.Actor.Attributes["containerExitCode"]
 			}
 
 			if err := coder.Encode(e); err != nil {

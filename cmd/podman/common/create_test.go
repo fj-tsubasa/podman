@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPodOptions(t *testing.T) {
 	entry := "/test1"
-	exampleOptions := entities.ContainerCreateOptions{CPUS: 5.5, CPUSetCPUs: "0-4", Entrypoint: &entry, Hostname: "foo", Name: "testing123", Volume: []string{"/fakeVol1", "/fakeVol2"}, Net: &entities.NetOptions{CNINetworks: []string{"FakeNetwork"}}, PID: "ns:/proc/self/ns"}
+	exampleOptions := entities.ContainerCreateOptions{CPUS: 5.5, CPUSetCPUs: "0-4", Entrypoint: &entry, Hostname: "foo", Name: "testing123", Volume: []string{"/fakeVol1", "/fakeVol2"}, Net: &entities.NetOptions{DNSSearch: []string{"search"}}, PID: "ns:/proc/self/ns"}
 
 	podOptions := entities.PodCreateOptions{}
 	err := common.ContainerToPodOptions(&exampleOptions, &podOptions)

@@ -1,14 +1,21 @@
+//go:build (amd64 && !windows) || (arm64 && !windows)
 // +build amd64,!windows arm64,!windows
 
 package qemu
 
-import "time"
+import (
+	"time"
+)
+
+type Provider struct{}
 
 type MachineVM struct {
 	// CPUs to be assigned to the VM
 	CPUs uint64
 	// The command line representation of the qemu command
 	CmdLine []string
+	// Mounts is the list of remote filesystems to mount
+	Mounts []Mount
 	// IdentityPath is the fq path to the ssh priv key
 	IdentityPath string
 	// IgnitionFilePath is the fq path to the .ign file
@@ -29,6 +36,18 @@ type MachineVM struct {
 	QMPMonitor Monitor
 	// RemoteUsername of the vm user
 	RemoteUsername string
+	// Whether this machine should run in a rootful or rootless manner
+	Rootful bool
+	// UID is the numerical id of the user that called machine
+	UID int
+}
+
+type Mount struct {
+	Type     string
+	Tag      string
+	Source   string
+	Target   string
+	ReadOnly bool
 }
 
 type Monitor struct {
@@ -44,6 +63,4 @@ var (
 	// defaultQMPTimeout is the timeout duration for the
 	// qmp monitor interactions
 	defaultQMPTimeout time.Duration = 2 * time.Second
-	// defaultRemoteUser describes the ssh username default
-	defaultRemoteUser = "core"
 )

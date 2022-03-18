@@ -16,6 +16,21 @@ load helpers
     if  [[ ${output} = ${heading} ]]; then
        die "network ls --noheading did not remove heading: $output"
     fi
+
+    # check deterministic list order
+    local net1=a-$(random_string 10)
+    local net2=b-$(random_string 10)
+    local net3=c-$(random_string 10)
+    run_podman network create $net1
+    run_podman network create $net2
+    run_podman network create $net3
+
+    run_podman network ls --quiet
+    # just check the the order of the created networks is correct
+    # we cannot do an exact match since developer and CI systems could contain more networks
+    is "$output" ".*$net1.*$net2.*$net3.*podman.*" "networks sorted alphabetically"
+
+    run_podman network rm $net1 $net2 $net3
 }
 
 # Copied from tsweeney's https://github.com/containers/podman/issues/4827
@@ -124,10 +139,11 @@ load helpers
 
 @test "podman run with slirp4ns assigns correct addresses to /etc/hosts" {
     CIDR="$(random_rfc1918_subnet)"
+    IP=$(hostname -I | cut -f 1 -d " ")
     local conname=con-$(random_string 10)
     run_podman run --rm --network slirp4netns:cidr="${CIDR}.0/24" \
                 --name $conname --hostname $conname $IMAGE cat /etc/hosts
-    is "$output"   ".*${CIDR}.2 host.containers.internal"   "host.containers.internal should be the cidr+2 address"
+    is "$output"   ".*${IP}	host.containers.internal"   "host.containers.internal should be the cidr+2 address"
     is "$output"   ".*${CIDR}.100	$conname $conname"   "$conname should be the cidr+100 address"
 }
 
@@ -240,13 +256,17 @@ load helpers
 
     # rootless cannot modify iptables
     if ! is_rootless; then
-        # flush the CNI iptables here
-        run iptables -t nat -F CNI-HOSTPORT-DNAT
+        # flush the port forwarding iptable rule here
+        chain="CNI-HOSTPORT-DNAT"
+        if is_netavark; then
+            chain="NETAVARK-HOSTPORT-DNAT"
+        fi
+        run iptables -t nat -F "$chain"
 
         # check that we cannot curl (timeout after 5 sec)
         run timeout 5 curl -s $SERVER/index.txt
         if [ "$status" -ne 124 ]; then
-	        die "curl did not timeout, status code: $status"
+            die "curl did not timeout, status code: $status"
         fi
     fi
 
@@ -316,7 +336,8 @@ load helpers
     is_rootless || skip "only meaningful for rootless"
 
     local mynetname=testnet-$(random_string 10)
-    run_podman network create $mynetname
+    run_podman --noout network create $mynetname
+    is "$output" "" "output should be empty"
 
     # Test that rootless cni adds /usr/sbin to $PATH
     # iptables is located under /usr/sbin and is needed for the CNI plugins.
@@ -324,7 +345,8 @@ load helpers
     PATH=/usr/local/bin:/usr/bin run_podman run --rm --network $mynetname $IMAGE ip addr
     is "$output" ".*eth0.*" "Interface eth0 not found in ip addr output"
 
-    run_podman network rm -t 0 -f $mynetname
+    run_podman --noout network rm -t 0 -f $mynetname
+    is "$output" "" "output should be empty"
 }
 
 @test "podman ipv6 in /etc/resolv.conf" {
@@ -569,6 +591,45 @@ load helpers
 
     # Cleanup network
     run_podman network rm -t 0 -f $netname
+}
+
+@test "podman run CONTAINERS_CONF dns options" {
+    skip_if_remote "CONTAINERS_CONF redirect does not work on remote"
+    # Test on the CLI and via containers.conf
+    containersconf=$PODMAN_TMPDIR/containers.conf
+
+    searchIP="100.100.100.100"
+    cat >$containersconf <<EOF
+[containers]
+  dns_searches  = [ "example.com"]
+  dns_servers = [
+    "1.1.1.1",
+    "$searchIP",
+    "1.0.0.1",
+    "8.8.8.8",
+]
+EOF
+
+    local nl="
+"
+
+    CONTAINERS_CONF=$containersconf run_podman run --rm $IMAGE cat /etc/resolv.conf
+    is "$output" "search example.com$nl.*" "correct seach domain"
+    is "$output" ".*nameserver 1.1.1.1${nl}nameserver $searchIP${nl}nameserver 1.0.0.1${nl}nameserver 8.8.8.8" "nameserver order is correct"
+
+    # create network with dns
+    local netname=testnet-$(random_string 10)
+    local subnet=$(random_rfc1918_subnet)
+    run_podman network create --subnet "$subnet.0/24"  $netname
+    # custom server overwrites the network dns server
+    CONTAINERS_CONF=$containersconf run_podman run --network $netname --rm $IMAGE cat /etc/resolv.conf
+    is "$output" "search example.com$nl.*" "correct seach domain"
+    is "$output" ".*nameserver 1.1.1.1${nl}nameserver $searchIP${nl}nameserver 1.0.0.1${nl}nameserver 8.8.8.8" "nameserver order is correct"
+
+    # we should use the integrated dns server
+    run_podman run --network $netname --rm $IMAGE cat /etc/resolv.conf
+    is "$output" "search dns.podman.*" "correct seach domain"
+    is "$output" ".*nameserver $subnet.1.*" "integrated dns nameserver is set"
 }
 
 # vim: filetype=sh

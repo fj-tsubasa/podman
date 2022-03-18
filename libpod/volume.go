@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/lock"
-	"github.com/containers/podman/v3/libpod/plugin"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/lock"
+	"github.com/containers/podman/v4/libpod/plugin"
 )
 
 // Volume is a libpod named volume.
@@ -254,4 +254,17 @@ func (v *Volume) IsDangling() (bool, error) {
 // mounting.
 func (v *Volume) UsesVolumeDriver() bool {
 	return !(v.config.Driver == define.VolumeDriverLocal || v.config.Driver == "")
+}
+
+func (v *Volume) Mount() (string, error) {
+	v.lock.Lock()
+	defer v.lock.Unlock()
+	err := v.mount()
+	return v.config.MountPoint, err
+}
+
+func (v *Volume) Unmount() error {
+	v.lock.Lock()
+	defer v.lock.Unlock()
+	return v.unmount(false)
 }

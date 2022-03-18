@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/containers/common/pkg/completion"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/utils"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/utils"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -61,7 +61,8 @@ func rmFlags(cmd *cobra.Command) {
 
 	flags.BoolVarP(&rmOptions.All, "all", "a", false, "Remove all containers")
 	flags.BoolVarP(&rmOptions.Ignore, "ignore", "i", false, "Ignore errors when a specified container is missing")
-	flags.BoolVarP(&rmOptions.Force, "force", "f", false, "Force removal of a running or unusable container.  The default is false")
+	flags.BoolVarP(&rmOptions.Force, "force", "f", false, "Force removal of a running or unusable container")
+	flags.BoolVar(&rmOptions.Depend, "depend", false, "Remove container and all containers that depend on the selected container")
 	timeFlagName := "time"
 	flags.UintVarP(&stopTimeout, timeFlagName, "t", containerConfig.Engine.StopTimeout, "Seconds to wait for stop before killing the container")
 	_ = cmd.RegisterFlagCompletionFunc(timeFlagName, completion.AutocompleteNone)
@@ -107,6 +108,11 @@ func rm(cmd *cobra.Command, args []string) error {
 		}
 		id := strings.Split(string(content), "\n")[0]
 		args = append(args, id)
+	}
+
+	if rmOptions.All {
+		logrus.Debug("--all is set: enforcing --depend=true")
+		rmOptions.Depend = true
 	}
 
 	return removeContainers(args, rmOptions, true)

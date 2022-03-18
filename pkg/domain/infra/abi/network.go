@@ -3,11 +3,11 @@ package abi
 import (
 	"context"
 
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	netutil "github.com/containers/podman/v3/libpod/network/util"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/common/libnetwork/types"
+	netutil "github.com/containers/common/libnetwork/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 )
 
@@ -71,7 +71,7 @@ func (ic *ContainerEngine) NetworkRm(ctx context.Context, namesOrIds []string, o
 		}
 		// We need to iterate containers looking to see if they belong to the given network
 		for _, c := range containers {
-			networks, _, err := c.Networks()
+			networks, err := c.Networks()
 			// if container vanished or network does not exist, go to next container
 			if errors.Is(err, define.ErrNoSuchNetwork) || errors.Is(err, define.ErrNoSuchCtr) {
 				continue
@@ -124,7 +124,7 @@ func (ic *ContainerEngine) NetworkDisconnect(ctx context.Context, networkname st
 }
 
 func (ic *ContainerEngine) NetworkConnect(ctx context.Context, networkname string, options entities.NetworkConnectOptions) error {
-	return ic.Libpod.ConnectContainerToNetwork(options.Container, networkname, options.Aliases)
+	return ic.Libpod.ConnectContainerToNetwork(options.Container, networkname, options.PerNetworkOptions)
 }
 
 // NetworkExists checks if the given network exists
@@ -152,7 +152,7 @@ func (ic *ContainerEngine) NetworkPrune(ctx context.Context, options entities.Ne
 	// containers want
 	networksToKeep := make(map[string]bool)
 	for _, c := range cons {
-		nets, _, err := c.Networks()
+		nets, err := c.Networks()
 		if err != nil {
 			return nil, err
 		}

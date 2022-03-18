@@ -1,4 +1,5 @@
-// +build amd64,!windows arm64,!windows
+//go:build amd64 || arm64
+// +build amd64 arm64
 
 package machine
 
@@ -12,11 +13,10 @@ import (
 	"github.com/containers/common/pkg/completion"
 	"github.com/containers/common/pkg/config"
 	"github.com/containers/common/pkg/report"
-	"github.com/containers/podman/v3/cmd/podman/common"
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/cmd/podman/validate"
-	"github.com/containers/podman/v3/pkg/machine"
-	"github.com/containers/podman/v3/pkg/machine/qemu"
+	"github.com/containers/podman/v4/cmd/podman/common"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/cmd/podman/validate"
+	"github.com/containers/podman/v4/pkg/machine"
 	"github.com/docker/go-units"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -32,6 +32,7 @@ var (
 		Args:              validate.NoArgs,
 		ValidArgsFunction: completion.AutocompleteNone,
 		Example: `podman machine list,
+  podman machine list --format json
   podman machine ls`,
 	}
 	listFlag = listFlagType{}
@@ -43,16 +44,19 @@ type listFlagType struct {
 }
 
 type machineReporter struct {
-	Name     string
-	Default  bool
-	Created  string
-	Running  bool
-	LastUp   string
-	Stream   string
-	VMType   string
-	CPUs     uint64
-	Memory   string
-	DiskSize string
+	Name           string
+	Default        bool
+	Created        string
+	Running        bool
+	LastUp         string
+	Stream         string
+	VMType         string
+	CPUs           uint64
+	Memory         string
+	DiskSize       string
+	Port           int
+	RemoteUsername string
+	IdentityPath   string
 }
 
 func init() {
@@ -69,9 +73,14 @@ func init() {
 }
 
 func list(cmd *cobra.Command, args []string) error {
-	var opts machine.ListOptions
-	// We only have qemu VM's for now
-	listResponse, err := qemu.List(opts)
+	var (
+		opts         machine.ListOptions
+		listResponse []*machine.ListResponse
+		err          error
+	)
+
+	provider := getSystemDefaultProvider()
+	listResponse, err = provider.List(opts)
 	if err != nil {
 		return errors.Wrap(err, "error listing vms")
 	}
@@ -91,7 +100,7 @@ func list(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		b, err := json.Marshal(machineReporter)
+		b, err := json.MarshalIndent(machineReporter, "", "    ")
 		if err != nil {
 			return err
 		}
@@ -182,8 +191,11 @@ func toMachineFormat(vms []*machine.ListResponse) ([]*machineReporter, error) {
 		response.Stream = streamName(vm.Stream)
 		response.VMType = vm.VMType
 		response.CPUs = vm.CPUs
-		response.Memory = strUint(vm.Memory * units.MiB)
-		response.DiskSize = strUint(vm.DiskSize * units.GiB)
+		response.Memory = strUint(vm.Memory)
+		response.DiskSize = strUint(vm.DiskSize)
+		response.Port = vm.Port
+		response.RemoteUsername = vm.RemoteUsername
+		response.IdentityPath = vm.IdentityPath
 
 		machineResponses = append(machineResponses, response)
 	}
@@ -214,8 +226,8 @@ func toHumanFormat(vms []*machine.ListResponse) ([]*machineReporter, error) {
 		response.Created = units.HumanDuration(time.Since(vm.CreatedAt)) + " ago"
 		response.VMType = vm.VMType
 		response.CPUs = vm.CPUs
-		response.Memory = units.HumanSize(float64(vm.Memory) * units.MiB)
-		response.DiskSize = units.HumanSize(float64(vm.DiskSize) * units.GiB)
+		response.Memory = units.HumanSize(float64(vm.Memory))
+		response.DiskSize = units.HumanSize(float64(vm.DiskSize))
 
 		humanResponses = append(humanResponses, response)
 	}

@@ -4,7 +4,7 @@ package containers
 import (
 	"net/url"
 
-	"github.com/containers/podman/v3/pkg/bindings/internal/util"
+	"github.com/containers/podman/v4/pkg/bindings/internal/util"
 )
 
 // Changed returns true if named field has been set
@@ -90,6 +90,21 @@ func (o *CommitOptions) GetPause() bool {
 		return z
 	}
 	return *o.Pause
+}
+
+// WithSquash set field Squash to given value
+func (o *CommitOptions) WithSquash(value bool) *CommitOptions {
+	o.Squash = &value
+	return o
+}
+
+// GetSquash returns value of field Squash
+func (o *CommitOptions) GetSquash() bool {
+	if o.Squash == nil {
+		var z bool
+		return z
+	}
+	return *o.Squash
 }
 
 // WithRepo set field Repo to given value

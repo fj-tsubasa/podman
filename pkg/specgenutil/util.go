@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/network/types"
 	storageTypes "github.com/containers/storage/types"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -36,21 +36,6 @@ func ReadPodIDFiles(files []string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
-}
-
-// ParseFilters transforms one filter format to another and validates input
-func ParseFilters(filter []string) (map[string][]string, error) {
-	// TODO Remove once filter refactor is finished and url.Values done.
-	filters := map[string][]string{}
-	for _, f := range filter {
-		t := strings.SplitN(f, "=", 2)
-		filters = make(map[string][]string)
-		if len(t) < 2 {
-			return map[string][]string{}, errors.Errorf("filter input must be in the form of filter=value: %s is invalid", f)
-		}
-		filters[t[0]] = append(filters[t[0]], t[1])
-	}
-	return filters, nil
 }
 
 // CreateExpose parses user-provided exposed port definitions and converts them
@@ -294,7 +279,7 @@ func CreateExitCommandArgs(storageConfig storageTypes.StoreOptions, config *conf
 		"--log-level", logrus.GetLevel().String(),
 		"--cgroup-manager", config.Engine.CgroupManager,
 		"--tmpdir", config.Engine.TmpDir,
-		"--cni-config-dir", config.Network.NetworkConfigDir,
+		"--network-config-dir", config.Network.NetworkConfigDir,
 		"--network-backend", config.Network.NetworkBackend,
 	}
 	if config.Engine.OCIRuntime != "" {

@@ -2,16 +2,17 @@ package generate
 
 import (
 	"context"
+	"encoding/json"
 	"path"
 	"strings"
 
 	"github.com/containers/common/libimage"
 	"github.com/containers/common/pkg/cgroups"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/specgen"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/runtime-tools/generate"
 	"github.com/pkg/errors"
@@ -151,7 +152,7 @@ func canMountSys(isRootless, isNewUserns bool, s *specgen.SpecGenerator) bool {
 	return true
 }
 
-func getCGroupPermissons(unmask []string) string {
+func getCgroupPermissons(unmask []string) string {
 	ro := "ro"
 	rw := "rw"
 	cgroup := "/sys/fs/cgroup"
@@ -174,8 +175,8 @@ func getCGroupPermissons(unmask []string) string {
 }
 
 // SpecGenToOCI returns the base configuration for the container.
-func SpecGenToOCI(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Runtime, rtc *config.Config, newImage *libimage.Image, mounts []spec.Mount, pod *libpod.Pod, finalCmd []string) (*spec.Spec, error) {
-	cgroupPerm := getCGroupPermissons(s.Unmask)
+func SpecGenToOCI(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Runtime, rtc *config.Config, newImage *libimage.Image, mounts []spec.Mount, pod *libpod.Pod, finalCmd []string, compatibleOptions *libpod.InfraInherit) (*spec.Spec, error) {
+	cgroupPerm := getCgroupPermissons(s.Unmask)
 
 	g, err := generate.New("linux")
 	if err != nil {
@@ -299,9 +300,44 @@ func SpecGenToOCI(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Runt
 		g.AddAnnotation(key, val)
 	}
 
-	g.Config.Linux.Resources = s.ResourceLimits
+	if compatibleOptions.InfraResources == nil && s.ResourceLimits != nil {
+		out, err := json.Marshal(s.ResourceLimits)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(out, g.Config.Linux.Resources)
+		if err != nil {
+			return nil, err
+		}
+	} else if s.ResourceLimits != nil { // if we have predefined resource limits we need to make sure we keep the infra and container limits
+		originalResources, err := json.Marshal(s.ResourceLimits)
+		if err != nil {
+			return nil, err
+		}
+		infraResources, err := json.Marshal(compatibleOptions.InfraResources)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(infraResources, s.ResourceLimits) // put infra's resource limits in the container
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(originalResources, s.ResourceLimits) // make sure we did not override anything
+		if err != nil {
+			return nil, err
+		}
+		g.Config.Linux.Resources = s.ResourceLimits
+	} else {
+		g.Config.Linux.Resources = compatibleOptions.InfraResources
+	}
 	// Devices
 
+	// set the default rule at the beginning of device configuration
+	if !inUserNS && !s.Privileged {
+		g.AddLinuxResourcesDevice(false, "", nil, nil, "rwm")
+	}
+
+	var userDevices []spec.LinuxDevice
 	if s.Privileged {
 		// If privileged, we need to add all the host devices to the
 		// spec.  We do not add the user provided ones because we are
@@ -316,17 +352,25 @@ func SpecGenToOCI(ctx context.Context, s *specgen.SpecGenerator, rt *libpod.Runt
 				return nil, err
 			}
 		}
+		if len(compatibleOptions.InfraDevices) > 0 && len(s.Devices) == 0 {
+			userDevices = compatibleOptions.InfraDevices
+		} else {
+			userDevices = s.Devices
+		}
 		// add default devices specified by caller
-		for _, device := range s.Devices {
+		for _, device := range userDevices {
 			if err = DevicesFromPath(&g, device.Path); err != nil {
 				return nil, err
 			}
 		}
 	}
-	s.HostDeviceList = s.Devices
+	s.HostDeviceList = userDevices
 
-	for _, dev := range s.DeviceCGroupRule {
-		g.AddLinuxResourcesDevice(true, dev.Type, dev.Major, dev.Minor, dev.Access)
+	// set the devices cgroup when not running in a user namespace
+	if !inUserNS && !s.Privileged {
+		for _, dev := range s.DeviceCgroupRule {
+			g.AddLinuxResourcesDevice(true, dev.Type, dev.Major, dev.Minor, dev.Access)
+		}
 	}
 
 	for k, v := range s.WeightDevice {

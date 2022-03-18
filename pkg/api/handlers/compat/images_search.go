@@ -5,12 +5,12 @@ import (
 	"net/http"
 
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/api/handlers/utils"
-	api "github.com/containers/podman/v3/pkg/api/types"
-	"github.com/containers/podman/v3/pkg/auth"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/infra/abi"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/api/handlers/utils"
+	api "github.com/containers/podman/v4/pkg/api/types"
+	"github.com/containers/podman/v4/pkg/auth"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/infra/abi"
 	"github.com/containers/storage"
 	"github.com/gorilla/schema"
 	"github.com/pkg/errors"
@@ -30,13 +30,13 @@ func SearchImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decoder.Decode(&query, r.URL.Query()); err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, errors.Wrapf(err, "failed to parse parameters for %s", r.URL.String()))
 		return
 	}
 
-	_, authfile, key, err := auth.GetCredentials(r)
+	_, authfile, err := auth.GetCredentials(r)
 	if err != nil {
-		utils.Error(w, "failed to retrieve repository credentials", http.StatusBadRequest, errors.Wrapf(err, "failed to parse %q header for %s", key, r.URL.String()))
+		utils.Error(w, http.StatusBadRequest, err)
 		return
 	}
 	defer auth.RemoveAuthfile(authfile)
@@ -58,7 +58,7 @@ func SearchImages(w http.ResponseWriter, r *http.Request) {
 	ir := abi.ImageEngine{Libpod: runtime}
 	reports, err := ir.Search(r.Context(), query.Term, options)
 	if err != nil {
-		utils.Error(w, "Something went wrong.", http.StatusInternalServerError, err)
+		utils.Error(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !utils.IsLibpodRequest(r) {

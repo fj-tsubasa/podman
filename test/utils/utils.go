@@ -12,11 +12,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/containers/storage/pkg/parsers/kernel"
 	. "github.com/onsi/ginkgo"       //nolint:golint,stylecheck
 	. "github.com/onsi/gomega"       //nolint:golint,stylecheck
 	. "github.com/onsi/gomega/gexec" //nolint:golint,stylecheck
 )
+
+type NetworkBackend int
+
+const (
+	// Container Networking backend
+	CNI NetworkBackend = iota
+	// Netavark network backend
+	Netavark NetworkBackend = iota
+)
+
+func (n NetworkBackend) ToString() string {
+	switch n {
+	case CNI:
+		return "cni"
+	case Netavark:
+		return "netavark"
+	}
+	logrus.Errorf("unknown network backend: %q", n)
+	return ""
+}
 
 var (
 	DefaultWaitTimeout   = 90
@@ -34,16 +56,18 @@ type PodmanTestCommon interface {
 
 // PodmanTest struct for command line options
 type PodmanTest struct {
-	PodmanMakeOptions  func(args []string, noEvents, noCache bool) []string
+	ImageCacheDir      string
+	ImageCacheFS       string
+	NetworkBackend     NetworkBackend
 	PodmanBinary       string
-	TempDir            string
-	RemoteTest         bool
+	PodmanMakeOptions  func(args []string, noEvents, noCache bool) []string
+	RemoteCommand      *exec.Cmd
 	RemotePodmanBinary string
 	RemoteSession      *os.Process
 	RemoteSocket       string
-	RemoteCommand      *exec.Cmd
-	ImageCacheDir      string
-	ImageCacheFS       string
+	RemoteSocketLock   string // If not "", should be removed _after_ RemoteSocket is removed
+	RemoteTest         bool
+	TempDir            string
 }
 
 // PodmanSession wraps the gexec.session so we can extend it
@@ -72,8 +96,10 @@ func (p *PodmanTest) PodmanAsUserBase(args []string, uid, gid uint32, cwd string
 	if p.RemoteTest {
 		podmanBinary = p.RemotePodmanBinary
 	}
-
 	runCmd := append(wrapper, podmanBinary)
+	if p.NetworkBackend == Netavark {
+		runCmd = append(runCmd, []string{"--network-backend", "netavark"}...)
+	}
 	if p.RemoteTest {
 		podmanOptions = append([]string{"--remote", "--url", p.RemoteSocket}, podmanOptions...)
 	}
@@ -342,6 +368,7 @@ func CreateTempDirInTempDir() (string, error) {
 // SystemExec is used to exec a system command to check its exit code or output
 func SystemExec(command string, args []string) *PodmanSession {
 	c := exec.Command(command, args...)
+	fmt.Println("Execing " + c.String() + "\n")
 	session, err := Start(c, GinkgoWriter, GinkgoWriter)
 	if err != nil {
 		Fail(fmt.Sprintf("unable to run command: %s %s", command, strings.Join(args, " ")))
@@ -353,6 +380,7 @@ func SystemExec(command string, args []string) *PodmanSession {
 // StartSystemExec is used to start exec a system command
 func StartSystemExec(command string, args []string) *PodmanSession {
 	c := exec.Command(command, args...)
+	fmt.Println("Execing " + c.String() + "\n")
 	session, err := Start(c, GinkgoWriter, GinkgoWriter)
 	if err != nil {
 		Fail(fmt.Sprintf("unable to run command: %s %s", command, strings.Join(args, " ")))
@@ -467,10 +495,6 @@ func Containerized() bool {
 		return false
 	}
 	return strings.Contains(string(b), "docker")
-}
-
-func init() {
-	rand.Seed(GinkgoRandomSeed())
 }
 
 var randomLetters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")

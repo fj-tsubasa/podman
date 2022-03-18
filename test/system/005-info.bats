@@ -43,7 +43,6 @@ host.conmon.package       | .*conmon.*
 host.cgroupManager        | \\\(systemd\\\|cgroupfs\\\)
 host.cgroupVersion        | v[12]
 host.ociRuntime.path      | $expr_path
-host.ociRuntime.package   | .*\\\(crun\\\|runc\\\).*
 store.configFile          | $expr_path
 store.graphDriverName     | [a-z0-9]\\\+\\\$
 store.graphRoot           | $expr_path
@@ -87,6 +86,18 @@ host.slirp4netns.executable | $expr_path
     # storage-driver=vfs, until we have kernels that support rootless overlay
     # mounts.
     is "$output" ".*graphOptions: {}" "output includes graphOptions: {}"
+}
+
+@test "podman info netavark " {
+    # Confirm netavark in use when explicitely required by execution environment.
+    if [[ "$NETWORK_BACKEND" == "netavark" ]]; then
+        if ! is_netavark; then
+            # Assume is_netavark() will provide debugging feedback.
+            die "Netavark driver testing required, but not in use by podman."
+        fi
+    else
+        skip "Netavark testing not requested (\$NETWORK_BACKEND='$NETWORK_BACKEND')"
+    fi
 }
 
 @test "podman --root PATH info - basic output" {

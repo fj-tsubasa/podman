@@ -3,7 +3,7 @@ package entities
 import (
 	"net/url"
 
-	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v4/libpod/define"
 	docker_api_types "github.com/docker/docker/api/types"
 	docker_api_types_volume "github.com/docker/docker/api/types/volume"
 )
@@ -186,4 +186,18 @@ type VolumeCreateBody struct {
 	//
 	// Required: true
 	Name string `json:"Name"`
+}
+
+// VolumeMountReport describes the response from volume mount
+type VolumeMountReport struct {
+	Err  error
+	Id   string //nolint
+	Name string
+	Path string
+}
+
+// VolumeUnmountReport describes the response from umounting a volume
+type VolumeUnmountReport struct {
+	Err error
+	Id  string //nolint
 }

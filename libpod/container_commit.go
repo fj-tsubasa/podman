@@ -9,9 +9,9 @@ import (
 	"github.com/containers/common/libimage"
 	is "github.com/containers/image/v5/storage"
 	"github.com/containers/image/v5/types"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/events"
-	libpodutil "github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/events"
+	libpodutil "github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -27,6 +27,7 @@ type ContainerCommitOptions struct {
 	Author         string
 	Message        string
 	Changes        []string
+	Squash         bool
 }
 
 // Commit commits the changes between a container and its image, creating a new
@@ -63,6 +64,7 @@ func (c *Container) Commit(ctx context.Context, destImage string, options Contai
 	commitOptions := buildah.CommitOptions{
 		SignaturePolicyPath:   options.SignaturePolicyPath,
 		ReportWriter:          options.ReportWriter,
+		Squash:                options.Squash,
 		SystemContext:         c.runtime.imageContext,
 		PreferredManifestType: options.PreferredManifestType,
 	}

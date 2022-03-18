@@ -18,9 +18,9 @@ import (
 	"strings"
 
 	"github.com/containers/buildah/define"
-	"github.com/containers/podman/v3/pkg/auth"
-	"github.com/containers/podman/v3/pkg/bindings"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/auth"
+	"github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/ioutils"
 	"github.com/docker/go-units"
@@ -62,6 +62,11 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 		}
 		params.Set("annotations", l)
 	}
+
+	if options.AllPlatforms {
+		params.Add("allplatforms", "1")
+	}
+
 	params.Add("t", options.Output)
 	for _, tag := range options.AdditionalTags {
 		params.Add("t", tag)
@@ -289,18 +294,19 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 		}
 		params.Set("ulimits", string(ulimitsJSON))
 	}
+
+	for _, uenv := range options.UnsetEnvs {
+		params.Add("unsetenv", uenv)
+	}
+
 	var (
-		headers map[string]string
+		headers http.Header
 		err     error
 	)
-	if options.SystemContext == nil {
-		headers, err = auth.Header(options.SystemContext, auth.XRegistryConfigHeader, "", "", "")
+	if options.SystemContext != nil && options.SystemContext.DockerAuthConfig != nil {
+		headers, err = auth.MakeXRegistryAuthHeader(options.SystemContext, options.SystemContext.DockerAuthConfig.Username, options.SystemContext.DockerAuthConfig.Password)
 	} else {
-		if options.SystemContext.DockerAuthConfig != nil {
-			headers, err = auth.Header(options.SystemContext, auth.XRegistryAuthHeader, options.SystemContext.AuthFilePath, options.SystemContext.DockerAuthConfig.Username, options.SystemContext.DockerAuthConfig.Password)
-		} else {
-			headers, err = auth.Header(options.SystemContext, auth.XRegistryConfigHeader, options.SystemContext.AuthFilePath, "", "")
-		}
+		headers, err = auth.MakeXRegistryConfigHeader(options.SystemContext, "", "")
 	}
 	if err != nil {
 		return nil, err
@@ -326,7 +332,7 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 	}
 
 	tarContent := []string{options.ContextDirectory}
-	newContainerFiles := []string{}
+	newContainerFiles := []string{} // dockerfile paths, relative to context dir, ToSlash()ed
 
 	dontexcludes := []string{"!Dockerfile", "!Containerfile", "!.dockerignore", "!.containerignore"}
 	for _, c := range containerFiles {
@@ -346,11 +352,13 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 			}
 			c = tmpFile.Name()
 		}
+		c = filepath.Clean(c)
 		cfDir := filepath.Dir(c)
 		if absDir, err := filepath.EvalSymlinks(cfDir); err == nil {
 			name := filepath.ToSlash(strings.TrimPrefix(c, cfDir+string(filepath.Separator)))
 			c = filepath.Join(absDir, name)
 		}
+
 		containerfile, err := filepath.Abs(c)
 		if err != nil {
 			logrus.Errorf("Cannot find absolute path of %v: %v", c, err)
@@ -374,7 +382,7 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 				tarContent = append(tarContent, containerfile)
 			}
 		}
-		newContainerFiles = append(newContainerFiles, containerfile)
+		newContainerFiles = append(newContainerFiles, filepath.ToSlash(containerfile))
 	}
 	if len(newContainerFiles) > 0 {
 		cFileJSON, err := json.Marshal(newContainerFiles)
@@ -415,7 +423,7 @@ func Build(ctx context.Context, containerFiles []string, options entities.BuildO
 								return nil, err
 							}
 
-							//add tmp file to context dir
+							// add tmp file to context dir
 							tarContent = append(tarContent, tmpSecretFile.Name())
 
 							modifiedSrc := fmt.Sprintf("src=%s", filepath.Base(tmpSecretFile.Name()))
@@ -628,7 +636,7 @@ func nTar(excludes []string, sources ...string) (io.ReadCloser, error) {
 					if lerr := tw.WriteHeader(hdr); lerr != nil {
 						return lerr
 					}
-				} //skip other than file,folder and symlinks
+				} // skip other than file,folder and symlinks
 				return nil
 			})
 			merr = multierror.Append(merr, err)

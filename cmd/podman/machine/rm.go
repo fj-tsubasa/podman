@@ -1,4 +1,4 @@
-// +build amd64,!windows arm64,!windows
+// +build amd64 arm64
 
 package machine
 
@@ -8,9 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/containers/podman/v3/cmd/podman/registry"
-	"github.com/containers/podman/v3/pkg/machine"
-	"github.com/containers/podman/v3/pkg/machine/qemu"
+	"github.com/containers/podman/v4/cmd/podman/registry"
+	"github.com/containers/podman/v4/pkg/machine"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +37,7 @@ func init() {
 
 	flags := rmCmd.Flags()
 	formatFlagName := "force"
-	flags.BoolVar(&destoryOptions.Force, formatFlagName, false, "Do not prompt before rming")
+	flags.BoolVarP(&destoryOptions.Force, formatFlagName, "f", false, "Stop and do not prompt before rming")
 
 	keysFlagName := "save-keys"
 	flags.BoolVar(&destoryOptions.SaveKeys, keysFlagName, false, "Do not delete SSH keys")
@@ -52,22 +51,20 @@ func init() {
 
 func rm(cmd *cobra.Command, args []string) error {
 	var (
-		err    error
-		vm     machine.VM
-		vmType string
+		err error
+		vm  machine.VM
 	)
 	vmName := defaultMachineName
 	if len(args) > 0 && len(args[0]) > 0 {
 		vmName = args[0]
 	}
-	switch vmType {
-	default:
-		vm, err = qemu.LoadVMByName(vmName)
-	}
+
+	provider := getSystemDefaultProvider()
+	vm, err = provider.LoadVMByName(vmName)
 	if err != nil {
 		return err
 	}
-	confirmationMessage, remove, err := vm.Remove(vmName, machine.RemoveOptions{})
+	confirmationMessage, remove, err := vm.Remove(vmName, destoryOptions)
 	if err != nil {
 		return err
 	}

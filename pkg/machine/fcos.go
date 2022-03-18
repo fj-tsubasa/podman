@@ -1,4 +1,4 @@
-// +build amd64,!windows arm64,!windows
+// +build amd64 arm64
 
 package machine
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/coreos/stream-metadata-go/fedoracoreos"
+	"github.com/coreos/stream-metadata-go/release"
 	"github.com/coreos/stream-metadata-go/stream"
 	"github.com/pkg/errors"
 
@@ -26,6 +27,14 @@ import (
 var (
 	artifact string = "qemu"
 	Format   string = "qcow2.xz"
+)
+
+const (
+	// Used for testing the latest podman in fcos
+	// special builds
+	podmanTesting     = "podman-testing"
+	PodmanTestingHost = "fedorapeople.org"
+	PodmanTestingURL  = "groups/podman/testing"
 )
 
 type FcosDownload struct {
@@ -65,25 +74,6 @@ func NewFcosDownloader(vmType, vmName, imageStream string) (DistributionDownload
 	return fcd, nil
 }
 
-func (f FcosDownload) getLocalUncompressedName() string {
-	uncompressedFilename := filepath.Join(filepath.Dir(f.LocalPath), f.VMName+"_"+f.ImageName)
-	return strings.TrimSuffix(uncompressedFilename, ".xz")
-}
-
-func (f FcosDownload) DownloadImage() error {
-	// check if the latest image is already present
-	ok, err := UpdateAvailable(&f.Download)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := DownloadVMImage(f.URL, f.LocalPath); err != nil {
-			return err
-		}
-	}
-	return Decompress(f.LocalPath, f.getLocalUncompressedName())
-}
-
 func (f FcosDownload) Get() *Download {
 	return &f.Download
 }
@@ -95,14 +85,14 @@ type fcosDownloadInfo struct {
 	Sha256Sum       string
 }
 
-func UpdateAvailable(d *Download) (bool, error) {
+func (f FcosDownload) HasUsableCache() (bool, error) {
 	//	 check the sha of the local image if it exists
 	//  get the sha of the remote image
 	// == dont bother to pull
-	if _, err := os.Stat(d.LocalPath); os.IsNotExist(err) {
+	if _, err := os.Stat(f.LocalPath); os.IsNotExist(err) {
 		return false, nil
 	}
-	fd, err := os.Open(d.LocalPath)
+	fd, err := os.Open(f.LocalPath)
 	if err != nil {
 		return false, err
 	}
@@ -115,7 +105,7 @@ func UpdateAvailable(d *Download) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return sum.Encoded() == d.Sha256sum, nil
+	return sum.Encoded() == f.Sha256sum, nil
 }
 
 func getFcosArch() string {
@@ -130,14 +120,39 @@ func getFcosArch() string {
 	return arch
 }
 
+// getStreamURL is a wrapper for the fcos.GetStream URL
+// so that we can inject a special stream and url for
+// testing podman before it merges into fcos builds
+func getStreamURL(streamType string) url2.URL {
+	// For the podmanTesting stream type, we point to
+	// a custom url on fedorapeople.org
+	if streamType == podmanTesting {
+		return url2.URL{
+			Scheme: "https",
+			Host:   PodmanTestingHost,
+			Path:   fmt.Sprintf("%s/%s.json", PodmanTestingURL, "podman4"),
+		}
+	}
+	return fedoracoreos.GetStreamURL(streamType)
+}
+
 // This should get Exported and stay put as it will apply to all fcos downloads
 // getFCOS parses fedoraCoreOS's stream and returns the image download URL and the release version
 func getFCOSDownload(imageStream string) (*fcosDownloadInfo, error) {
 	var (
 		fcosstable stream.Stream
+		altMeta    release.Release
 		streamType string
 	)
+
+	// This is being hard set to testing. Once podman4 is in the
+	// fcos trees, we should remove it and re-release at least on
+	// macs.
+	imageStream = "podman-testing"
+
 	switch imageStream {
+	case "podman-testing":
+		streamType = "podman-testing"
 	case "testing", "":
 		streamType = fedoracoreos.StreamTesting
 	case "next":
@@ -147,7 +162,7 @@ func getFCOSDownload(imageStream string) (*fcosDownloadInfo, error) {
 	default:
 		return nil, errors.Errorf("invalid stream %s: valid streams are `testing` and `stable`", imageStream)
 	}
-	streamurl := fedoracoreos.GetStreamURL(streamType)
+	streamurl := getStreamURL(streamType)
 	resp, err := http.Get(streamurl.String())
 	if err != nil {
 		return nil, err
@@ -161,6 +176,27 @@ func getFCOSDownload(imageStream string) (*fcosDownloadInfo, error) {
 			logrus.Error(err)
 		}
 	}()
+	if imageStream == podmanTesting {
+		if err := json.Unmarshal(body, &altMeta); err != nil {
+			return nil, err
+		}
+
+		arches, ok := altMeta.Architectures[getFcosArch()]
+		if !ok {
+			return nil, fmt.Errorf("unable to pull VM image: no targetArch in stream")
+		}
+		qcow2, ok := arches.Media.Qemu.Artifacts["qcow2.xz"]
+		if !ok {
+			return nil, fmt.Errorf("unable to pull VM image: no qcow2.xz format in stream")
+		}
+		disk := qcow2.Disk
+
+		return &fcosDownloadInfo{
+			Location:        disk.Location,
+			Sha256Sum:       disk.Sha256,
+			CompressionType: "xz",
+		}, nil
+	}
 
 	if err := json.Unmarshal(body, &fcosstable); err != nil {
 		return nil, err

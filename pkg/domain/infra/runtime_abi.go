@@ -6,11 +6,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/pkg/bindings"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/infra/abi"
-	"github.com/containers/podman/v3/pkg/domain/infra/tunnel"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/infra/abi"
+	"github.com/containers/podman/v4/pkg/domain/infra/tunnel"
 )
 
 // NewContainerEngine factory provides a libpod runtime for container-related operations
@@ -26,7 +26,7 @@ func NewContainerEngine(facts *entities.PodmanConfig) (entities.ContainerEngine,
 	return nil, fmt.Errorf("runtime mode '%v' is not supported", facts.EngineMode)
 }
 
-// NewContainerEngine factory provides a libpod runtime for image-related operations
+// NewImageEngine factory provides a libpod runtime for image-related operations
 func NewImageEngine(facts *entities.PodmanConfig) (entities.ImageEngine, error) {
 	switch facts.EngineMode {
 	case entities.ABIMode:

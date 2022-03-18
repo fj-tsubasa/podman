@@ -5,7 +5,7 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/containers/podman/v3/pkg/bindings/internal/util"
+	"github.com/containers/podman/v4/pkg/bindings/internal/util"
 )
 
 // Changed returns true if named field has been set
@@ -16,6 +16,21 @@ func (o *KubeOptions) Changed(fieldName string) bool {
 // ToParams formats struct fields to be passed to API service
 func (o *KubeOptions) ToParams() (url.Values, error) {
 	return util.ToParams(o)
+}
+
+// WithAnnotations set field Annotations to given value
+func (o *KubeOptions) WithAnnotations(value map[string]string) *KubeOptions {
+	o.Annotations = value
+	return o
+}
+
+// GetAnnotations returns value of field Annotations
+func (o *KubeOptions) GetAnnotations() map[string]string {
+	if o.Annotations == nil {
+		var z map[string]string
+		return z
+	}
+	return o.Annotations
 }
 
 // WithAuthfile set field Authfile to given value
@@ -79,15 +94,15 @@ func (o *KubeOptions) GetPassword() string {
 }
 
 // WithNetwork set field Network to given value
-func (o *KubeOptions) WithNetwork(value string) *KubeOptions {
+func (o *KubeOptions) WithNetwork(value []string) *KubeOptions {
 	o.Network = &value
 	return o
 }
 
 // GetNetwork returns value of field Network
-func (o *KubeOptions) GetNetwork() string {
+func (o *KubeOptions) GetNetwork() []string {
 	if o.Network == nil {
-		var z string
+		var z []string
 		return z
 	}
 	return *o.Network

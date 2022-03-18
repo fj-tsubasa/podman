@@ -6,10 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/network"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/pkg/errors"
 )
 
@@ -210,6 +209,15 @@ func GenerateContainerFilterFuncs(filter string, filterValues []string, r *libpo
 			return false
 		}, nil
 	case "network":
+		var inputNetNames []string
+		for _, val := range filterValues {
+			net, err := r.Network().NetworkInspect(val)
+			if err != nil {
+				// ignore not found errors
+				break
+			}
+			inputNetNames = append(inputNetNames, net.Name)
+		}
 		return func(c *libpod.Container) bool {
 			networkMode := c.NetworkMode()
 			// support docker like `--filter network=container:<IDorName>`
@@ -241,18 +249,14 @@ func GenerateContainerFilterFuncs(filter string, filterValues []string, r *libpo
 				return false
 			}
 
-			networks, _, err := c.Networks()
+			networks, err := c.Networks()
 			// if err or no networks, quick out
 			if err != nil || len(networks) == 0 {
 				return false
 			}
 			for _, net := range networks {
-				netID := network.GetNetworkID(net)
-				for _, val := range filterValues {
-					// match by network name or id
-					if val == net || val == netID {
-						return true
-					}
+				if util.StringInSlice(net, inputNetNames) {
+					return true
 				}
 			}
 			return false

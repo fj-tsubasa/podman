@@ -4,11 +4,11 @@ import (
 	"context"
 	"io"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/domain/entities/reports"
-	"github.com/containers/podman/v3/pkg/specgen"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities/reports"
+	"github.com/containers/podman/v4/pkg/specgen"
 )
 
 type ContainerCopyFunc func() error
@@ -19,6 +19,7 @@ type ContainerEngine interface {
 	ContainerAttach(ctx context.Context, nameOrID string, options AttachOptions) error
 	ContainerCheckpoint(ctx context.Context, namesOrIds []string, options CheckpointOptions) ([]*CheckpointReport, error)
 	ContainerCleanup(ctx context.Context, namesOrIds []string, options ContainerCleanupOptions) ([]*ContainerCleanupReport, error)
+	ContainerClone(ctx context.Context, ctrClone ContainerCloneOptions) (*ContainerCreateReport, error)
 	ContainerCommit(ctx context.Context, nameOrID string, options CommitOptions) (*CommitReport, error)
 	ContainerCopyFromArchive(ctx context.Context, nameOrID, path string, reader io.Reader, options CopyOptions) (ContainerCopyFunc, error)
 	ContainerCopyToArchive(ctx context.Context, nameOrID string, path string, writer io.Writer) (ContainerCopyFunc, error)
@@ -40,7 +41,7 @@ type ContainerEngine interface {
 	ContainerRename(ctr context.Context, nameOrID string, options ContainerRenameOptions) error
 	ContainerRestart(ctx context.Context, namesOrIds []string, options RestartOptions) ([]*RestartReport, error)
 	ContainerRestore(ctx context.Context, namesOrIds []string, options RestoreOptions) ([]*RestoreReport, error)
-	ContainerRm(ctx context.Context, namesOrIds []string, options RmOptions) ([]*RmReport, error)
+	ContainerRm(ctx context.Context, namesOrIds []string, options RmOptions) ([]*reports.RmReport, error)
 	ContainerRun(ctx context.Context, opts ContainerRunOptions) (*ContainerRunReport, error)
 	ContainerRunlabel(ctx context.Context, label string, image string, args []string, opts ContainerRunlabelOptions) error
 	ContainerStart(ctx context.Context, namesOrIds []string, options ContainerStartOptions) ([]*ContainerStartReport, error)
@@ -98,6 +99,8 @@ type ContainerEngine interface {
 	VolumeMounted(ctx context.Context, namesOrID string) (*BoolReport, error)
 	VolumeInspect(ctx context.Context, namesOrIds []string, opts InspectOptions) ([]*VolumeInspectReport, []error, error)
 	VolumeList(ctx context.Context, opts VolumeListOptions) ([]*VolumeListReport, error)
+	VolumeMount(ctx context.Context, namesOrIds []string) ([]*VolumeMountReport, error)
 	VolumePrune(ctx context.Context, options VolumePruneOptions) ([]*reports.PruneReport, error)
 	VolumeRm(ctx context.Context, namesOrIds []string, opts VolumeRmOptions) ([]*VolumeRmReport, error)
+	VolumeUnmount(ctx context.Context, namesOrIds []string) ([]*VolumeUnmountReport, error)
 }

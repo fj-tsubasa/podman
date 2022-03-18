@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containers/podman/v3/libpod"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/pkg/domain/entities"
-	"github.com/containers/podman/v3/pkg/domain/filters"
-	psdefine "github.com/containers/podman/v3/pkg/ps/define"
+	"github.com/containers/podman/v4/libpod"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/domain/filters"
+	psdefine "github.com/containers/podman/v4/pkg/ps/define"
 	"github.com/containers/storage"
 	"github.com/containers/storage/types"
 	"github.com/pkg/errors"
@@ -74,7 +74,7 @@ func GetContainerLists(runtime *libpod.Runtime, options entities.ContainerListOp
 		}
 	}
 
-	if options.All && options.External {
+	if options.External {
 		listCon, err := GetExternalContainerLists(runtime)
 		if err != nil {
 			return nil, err
@@ -207,7 +207,7 @@ func ListContainerBatch(rt *libpod.Runtime, ctr *libpod.Container, opts entities
 		return entities.ListContainer{}, err
 	}
 
-	networks, _, err := ctr.Networks()
+	networks, err := ctr.Networks()
 	if err != nil {
 		return entities.ListContainer{}, err
 	}

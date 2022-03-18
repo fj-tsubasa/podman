@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"io"
 
-	"github.com/containers/podman/v3/libpod/define"
+	"github.com/containers/podman/v4/libpod/define"
 )
 
 //go:generate go run ../generator/generator.go LogOptions
@@ -30,6 +30,7 @@ type CommitOptions struct {
 	Comment *string
 	Format  *string
 	Pause   *bool
+	Squash  *bool
 	Repo    *string
 	Tag     *string
 }
@@ -63,14 +64,21 @@ type RestoreOptions struct {
 	IgnoreVolumes   *bool
 	IgnoreStaticIP  *bool
 	IgnoreStaticMAC *bool
-	ImportAchive    *string
-	Keep            *bool
-	Name            *string
-	TCPEstablished  *bool
-	Pod             *string
-	PrintStats      *bool
-	PublishPorts    []string
-	FileLocks       *bool
+	// ImportAchive is the path to an archive which contains the checkpoint data.
+	//
+	// Deprecated: Use ImportArchive instead. This field name is a typo and
+	// will be removed in a future major release.
+	ImportAchive *string
+	// ImportArchive is the path to an archive which contains the checkpoint data.
+	// ImportArchive is preferred over ImportAchive when both are set.
+	ImportArchive  *string
+	Keep           *bool
+	Name           *string
+	TCPEstablished *bool
+	Pod            *string
+	PrintStats     *bool
+	PublishPorts   []string
+	FileLocks      *bool
 }
 
 //go:generate go run ../generator/generator.go CreateOptions
@@ -138,6 +146,7 @@ type PruneOptions struct {
 //go:generate go run ../generator/generator.go RemoveOptions
 // RemoveOptions are optional options for removing containers
 type RemoveOptions struct {
+	Depend  *bool
 	Ignore  *bool
 	Force   *bool
 	Volumes *bool

@@ -1,13 +1,19 @@
+//go:build (amd64 && !windows) || (arm64 && !windows)
 // +build amd64,!windows arm64,!windows
 
 package qemu
 
 import (
 	"bufio"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,23 +22,47 @@ import (
 	"time"
 
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/pkg/machine"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/utils"
+	"github.com/containers/podman/v4/pkg/machine"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/utils"
 	"github.com/containers/storage/pkg/homedir"
 	"github.com/digitalocean/go-qemu/qmp"
+	"github.com/docker/go-units"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
 var (
+	qemuProvider = &Provider{}
 	// vmtype refers to qemu (vs libvirt, krun, etc)
 	vmtype = "qemu"
 )
 
+func GetQemuProvider() machine.Provider {
+	return qemuProvider
+}
+
+const (
+	VolumeTypeVirtfs     = "virtfs"
+	MountType9p          = "9p"
+	dockerSock           = "/var/run/docker.sock"
+	dockerConnectTimeout = 5 * time.Second
+	apiUpTimeout         = 20 * time.Second
+)
+
+type apiForwardingState int
+
+const (
+	noForwarding apiForwardingState = iota
+	claimUnsupported
+	notInstalled
+	machineLocal
+	dockerGlobal
+)
+
 // NewMachine initializes an instance of a virtual machine based on the qemu
 // virtualization.
-func NewMachine(opts machine.InitOptions) (machine.VM, error) {
+func (p *Provider) NewMachine(opts machine.InitOptions) (machine.VM, error) {
 	vmConfigDir, err := machine.GetConfDir(vmtype)
 	if err != nil {
 		return nil, err
@@ -44,16 +74,8 @@ func NewMachine(opts machine.InitOptions) (machine.VM, error) {
 	ignitionFile := filepath.Join(vmConfigDir, vm.Name+".ign")
 	vm.IgnitionFilePath = ignitionFile
 
-	// An image was specified
-	if len(opts.ImagePath) > 0 {
-		vm.ImagePath = opts.ImagePath
-	}
-
-	// Assign remote user name. if not provided, use default
+	vm.ImagePath = opts.ImagePath
 	vm.RemoteUsername = opts.Username
-	if len(vm.RemoteUsername) < 1 {
-		vm.RemoteUsername = defaultRemoteUser
-	}
 
 	// Add a random port for ssh
 	port, err := utils.GetRandomPort()
@@ -66,11 +88,16 @@ func NewMachine(opts machine.InitOptions) (machine.VM, error) {
 	vm.Memory = opts.Memory
 	vm.DiskSize = opts.DiskSize
 
-	// Look up the executable
-	execPath, err := exec.LookPath(QemuCommand)
+	// Find the qemu executable
+	cfg, err := config.Default()
 	if err != nil {
 		return nil, err
 	}
+	execPath, err := cfg.FindHelperBinary(QemuCommand, true)
+	if err != nil {
+		return nil, err
+	}
+
 	cmd := append([]string{execPath})
 	// Add memory
 	cmd = append(cmd, []string{"-m", strconv.Itoa(int(vm.Memory))}...)
@@ -106,7 +133,7 @@ func NewMachine(opts machine.InitOptions) (machine.VM, error) {
 
 // LoadByName reads a json file that describes a known qemu vm
 // and returns a vm instance
-func LoadVMByName(name string) (machine.VM, error) {
+func (p *Provider) LoadVMByName(name string) (machine.VM, error) {
 	vm := new(MachineVM)
 	vmConfigDir, err := machine.GetConfDir(vmtype)
 	if err != nil {
@@ -120,37 +147,46 @@ func LoadVMByName(name string) (machine.VM, error) {
 		return nil, err
 	}
 	err = json.Unmarshal(b, vm)
+
+	// It is here for providing the ability to propagate
+	// proxy settings (e.g. HTTP_PROXY and others) on a start
+	// and avoid a need of re-creating/re-initiating a VM
+	if proxyOpts := machine.GetProxyVariables(); len(proxyOpts) > 0 {
+		proxyStr := "name=opt/com.coreos/environment,string="
+		var proxies string
+		for k, v := range proxyOpts {
+			proxies = fmt.Sprintf("%s%s=\"%s\"|", proxies, k, v)
+		}
+		proxyStr = fmt.Sprintf("%s%s", proxyStr, base64.StdEncoding.EncodeToString([]byte(proxies)))
+		vm.CmdLine = append(vm.CmdLine, "-fw_cfg", proxyStr)
+	}
+
 	logrus.Debug(vm.CmdLine)
 	return vm, err
 }
 
 // Init writes the json configuration file to the filesystem for
 // other verbs (start, stop)
-func (v *MachineVM) Init(opts machine.InitOptions) error {
+func (v *MachineVM) Init(opts machine.InitOptions) (bool, error) {
 	var (
 		key string
 	)
 	sshDir := filepath.Join(homedir.Get(), ".ssh")
-	// GetConfDir creates the directory so no need to check for
-	// its existence
-	vmConfigDir, err := machine.GetConfDir(vmtype)
-	if err != nil {
-		return err
-	}
-	jsonFile := filepath.Join(vmConfigDir, v.Name) + ".json"
 	v.IdentityPath = filepath.Join(sshDir, v.Name)
+	v.Rootful = opts.Rootful
 
 	switch opts.ImagePath {
 	case "testing", "next", "stable", "":
 		// Get image as usual
 		v.ImageStream = opts.ImagePath
 		dd, err := machine.NewFcosDownloader(vmtype, v.Name, opts.ImagePath)
+
 		if err != nil {
-			return err
+			return false, err
 		}
 		v.ImagePath = dd.Get().LocalUncompressedFile
-		if err := dd.DownloadImage(); err != nil {
-			return err
+		if err := machine.DownloadImage(dd); err != nil {
+			return false, err
 		}
 	default:
 		// The user has provided an alternate image which can be a file path
@@ -158,67 +194,128 @@ func (v *MachineVM) Init(opts machine.InitOptions) error {
 		v.ImageStream = "custom"
 		g, err := machine.NewGenericDownloader(vmtype, v.Name, opts.ImagePath)
 		if err != nil {
-			return err
+			return false, err
 		}
 		v.ImagePath = g.Get().LocalUncompressedFile
-		if err := g.DownloadImage(); err != nil {
-			return err
+		if err := machine.DownloadImage(g); err != nil {
+			return false, err
 		}
 	}
 	// Add arch specific options including image location
 	v.CmdLine = append(v.CmdLine, v.addArchOptions()...)
 
+	var volumeType string
+	switch opts.VolumeDriver {
+	case "virtfs":
+		volumeType = VolumeTypeVirtfs
+	case "": // default driver
+		volumeType = VolumeTypeVirtfs
+	default:
+		err := fmt.Errorf("unknown volume driver: %s", opts.VolumeDriver)
+		return false, err
+	}
+
+	mounts := []Mount{}
+	for i, volume := range opts.Volumes {
+		tag := fmt.Sprintf("vol%d", i)
+		paths := strings.SplitN(volume, ":", 3)
+		source := paths[0]
+		target := source
+		readonly := false
+		if len(paths) > 1 {
+			target = paths[1]
+		}
+		if len(paths) > 2 {
+			options := paths[2]
+			volopts := strings.Split(options, ",")
+			for _, o := range volopts {
+				switch o {
+				case "rw":
+					readonly = false
+				case "ro":
+					readonly = true
+				default:
+					fmt.Printf("Unknown option: %s\n", o)
+				}
+			}
+		}
+		switch volumeType {
+		case VolumeTypeVirtfs:
+			virtfsOptions := fmt.Sprintf("local,path=%s,mount_tag=%s,security_model=mapped-xattr", source, tag)
+			if readonly {
+				virtfsOptions += ",readonly"
+			}
+			v.CmdLine = append(v.CmdLine, []string{"-virtfs", virtfsOptions}...)
+			mounts = append(mounts, Mount{Type: MountType9p, Tag: tag, Source: source, Target: target, ReadOnly: readonly})
+		}
+	}
+	v.Mounts = mounts
+	v.UID = os.Getuid()
+
 	// Add location of bootable image
 	v.CmdLine = append(v.CmdLine, "-drive", "if=virtio,file="+v.ImagePath)
 	// This kind of stinks but no other way around this r/n
 	if len(opts.IgnitionPath) < 1 {
-		uri := machine.SSHRemoteConnection.MakeSSHURL("localhost", "/run/user/1000/podman/podman.sock", strconv.Itoa(v.Port), v.RemoteUsername)
-		if err := machine.AddConnection(&uri, v.Name, filepath.Join(sshDir, v.Name), opts.IsDefault); err != nil {
-			return err
+		uri := machine.SSHRemoteConnection.MakeSSHURL("localhost", fmt.Sprintf("/run/user/%d/podman/podman.sock", v.UID), strconv.Itoa(v.Port), v.RemoteUsername)
+		uriRoot := machine.SSHRemoteConnection.MakeSSHURL("localhost", "/run/podman/podman.sock", strconv.Itoa(v.Port), "root")
+		identity := filepath.Join(sshDir, v.Name)
+
+		uris := []url.URL{uri, uriRoot}
+		names := []string{v.Name, v.Name + "-root"}
+
+		// The first connection defined when connections is empty will become the default
+		// regardless of IsDefault, so order according to rootful
+		if opts.Rootful {
+			uris[0], names[0], uris[1], names[1] = uris[1], names[1], uris[0], names[0]
 		}
 
-		uriRoot := machine.SSHRemoteConnection.MakeSSHURL("localhost", "/run/podman/podman.sock", strconv.Itoa(v.Port), "root")
-		if err := machine.AddConnection(&uriRoot, v.Name+"-root", filepath.Join(sshDir, v.Name), opts.IsDefault); err != nil {
-			return err
+		for i := 0; i < 2; i++ {
+			if err := machine.AddConnection(&uris[i], names[i], identity, opts.IsDefault && i == 0); err != nil {
+				return false, err
+			}
 		}
 	} else {
 		fmt.Println("An ignition path was provided.  No SSH connection was added to Podman")
 	}
 	// Write the JSON file
-	b, err := json.MarshalIndent(v, "", " ")
-	if err != nil {
-		return err
-	}
-	if err := ioutil.WriteFile(jsonFile, b, 0644); err != nil {
-		return err
-	}
+	v.writeConfig()
 
 	// User has provided ignition file so keygen
 	// will be skipped.
 	if len(opts.IgnitionPath) < 1 {
+		var err error
 		key, err = machine.CreateSSHKeys(v.IdentityPath)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	// Run arch specific things that need to be done
 	if err := v.prepare(); err != nil {
-		return err
+		return false, err
 	}
 
 	originalDiskSize, err := getDiskSize(v.ImagePath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Resize the disk image to input disk size
 	// only if the virtualdisk size is less than
 	// the given disk size
 	if opts.DiskSize<<(10*3) > originalDiskSize {
-		resize := exec.Command("qemu-img", []string{"resize", v.ImagePath, strconv.Itoa(int(opts.DiskSize)) + "G"}...)
+		// Find the qemu executable
+		cfg, err := config.Default()
+		if err != nil {
+			return false, err
+		}
+		resizePath, err := cfg.FindHelperBinary("qemu-img", true)
+		if err != nil {
+			return false, err
+		}
+		resize := exec.Command(resizePath, []string{"resize", v.ImagePath, strconv.Itoa(int(opts.DiskSize)) + "G"}...)
 		resize.Stdout = os.Stdout
 		resize.Stderr = os.Stderr
 		if err := resize.Run(); err != nil {
-			return errors.Errorf("error resizing image: %q", err)
+			return false, errors.Errorf("error resizing image: %q", err)
 		}
 	}
 	// If the user provides an ignition file, we need to
@@ -226,18 +323,45 @@ func (v *MachineVM) Init(opts machine.InitOptions) error {
 	if len(opts.IgnitionPath) > 0 {
 		inputIgnition, err := ioutil.ReadFile(opts.IgnitionPath)
 		if err != nil {
-			return err
+			return false, err
 		}
-		return ioutil.WriteFile(v.IgnitionFilePath, inputIgnition, 0644)
+		return false, ioutil.WriteFile(v.IgnitionFilePath, inputIgnition, 0644)
 	}
 	// Write the ignition file
 	ign := machine.DynamicIgnition{
 		Name:      opts.Username,
 		Key:       key,
 		VMName:    v.Name,
+		TimeZone:  opts.TimeZone,
 		WritePath: v.IgnitionFilePath,
+		UID:       v.UID,
 	}
-	return machine.NewIgnitionFile(ign)
+	err = machine.NewIgnitionFile(ign)
+	return err == nil, err
+}
+
+func (v *MachineVM) Set(name string, opts machine.SetOptions) error {
+	if v.Rootful == opts.Rootful {
+		return nil
+	}
+
+	changeCon, err := machine.AnyConnectionDefault(v.Name, v.Name+"-root")
+	if err != nil {
+		return err
+	}
+
+	if changeCon {
+		newDefault := v.Name
+		if opts.Rootful {
+			newDefault += "-root"
+		}
+		if err := machine.ChangeDefault(newDefault); err != nil {
+			return err
+		}
+	}
+
+	v.Rootful = opts.Rootful
+	return v.writeConfig()
 }
 
 // Start executes the qemu command line and forks it
@@ -249,7 +373,8 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 		wait           time.Duration = time.Millisecond * 500
 	)
 
-	if err := v.startHostNetworking(); err != nil {
+	forwardSock, forwardState, err := v.startHostNetworking()
+	if err != nil {
 		return errors.Errorf("unable to start host networking: %q", err)
 	}
 
@@ -328,11 +453,106 @@ func (v *MachineVM) Start(name string, _ machine.StartOptions) error {
 		return err
 	}
 	_, err = bufio.NewReader(conn).ReadString('\n')
-	return err
+	if err != nil {
+		return err
+	}
+
+	if len(v.Mounts) > 0 {
+		running, err := v.isRunning()
+		if err != nil {
+			return err
+		}
+		listening := v.isListening()
+		for !running || !listening {
+			time.Sleep(100 * time.Millisecond)
+			running, err = v.isRunning()
+			if err != nil {
+				return err
+			}
+			listening = v.isListening()
+		}
+	}
+	for _, mount := range v.Mounts {
+		fmt.Printf("Mounting volume... %s:%s\n", mount.Source, mount.Target)
+		// create mountpoint directory if it doesn't exist
+		// because / is immutable, we have to monkey around with permissions
+		// if we dont mount in /home or /mnt
+		args := []string{"-q", "--"}
+		if !strings.HasPrefix(mount.Target, "/home") || !strings.HasPrefix(mount.Target, "/mnt") {
+			args = append(args, "sudo", "chattr", "-i", "/", ";")
+		}
+		args = append(args, "sudo", "mkdir", "-p", mount.Target)
+		if !strings.HasPrefix(mount.Target, "/home") || !strings.HasPrefix(mount.Target, "/mnt") {
+			args = append(args, ";", "sudo", "chattr", "+i", "/", ";")
+		}
+		err = v.SSH(name, machine.SSHOptions{Args: args})
+		if err != nil {
+			return err
+		}
+		switch mount.Type {
+		case MountType9p:
+			mountOptions := []string{"-t", "9p"}
+			mountOptions = append(mountOptions, []string{"-o", "trans=virtio", mount.Tag, mount.Target}...)
+			mountOptions = append(mountOptions, []string{"-o", "version=9p2000.L,msize=131072"}...)
+			if mount.ReadOnly {
+				mountOptions = append(mountOptions, []string{"-o", "ro"}...)
+			}
+			err = v.SSH(name, machine.SSHOptions{Args: append([]string{"-q", "--", "sudo", "mount"}, mountOptions...)})
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unknown mount type: %s", mount.Type)
+		}
+	}
+
+	waitAPIAndPrintInfo(forwardState, forwardSock, v.Rootful, v.Name)
+
+	return nil
+}
+
+func (v *MachineVM) checkStatus(monitor *qmp.SocketMonitor) (machine.QemuMachineStatus, error) {
+	// this is the format returned from the monitor
+	// {"return": {"status": "running", "singlestep": false, "running": true}}
+
+	type statusDetails struct {
+		Status  string `json:"status"`
+		Step    bool   `json:"singlestep"`
+		Running bool   `json:"running"`
+	}
+	type statusResponse struct {
+		Response statusDetails `json:"return"`
+	}
+	var response statusResponse
+
+	checkCommand := struct {
+		Execute string `json:"execute"`
+	}{
+		Execute: "query-status",
+	}
+	input, err := json.Marshal(checkCommand)
+	if err != nil {
+		return "", err
+	}
+	b, err := monitor.Run(input)
+	if err != nil {
+		if errors.Cause(err) == os.ErrNotExist {
+			return machine.Stopped, nil
+		}
+		return "", err
+	}
+	if err := json.Unmarshal(b, &response); err != nil {
+		return "", err
+	}
+	if response.Response.Status == machine.Running {
+		return machine.Running, nil
+	}
+	return machine.Stopped, nil
 }
 
 // Stop uses the qmp monitor to call a system_powerdown
 func (v *MachineVM) Stop(name string, _ machine.StopOptions) error {
+	var disconnected bool
 	// check if the qmp socket is there. if not, qemu instance is gone
 	if _, err := os.Stat(v.QMPMonitor.Address); os.IsNotExist(err) {
 		// Right now it is NOT an error to stop a stopped machine
@@ -357,19 +577,22 @@ func (v *MachineVM) Stop(name string, _ machine.StopOptions) error {
 		return err
 	}
 	defer func() {
-		if err := qmpMonitor.Disconnect(); err != nil {
-			logrus.Error(err)
+		if !disconnected {
+			if err := qmpMonitor.Disconnect(); err != nil {
+				logrus.Error(err)
+			}
 		}
 	}()
+
 	if _, err = qmpMonitor.Run(input); err != nil {
 		return err
 	}
+
 	qemuSocketFile, pidFile, err := v.getSocketandPid()
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
-		logrus.Info(err)
 		return nil
 	}
 	pidString, err := ioutil.ReadFile(pidFile)
@@ -396,6 +619,24 @@ func (v *MachineVM) Stop(name string, _ machine.StopOptions) error {
 	// Remove socket
 	if err := os.Remove(qemuSocketFile); err != nil {
 		return err
+	}
+
+	if err := qmpMonitor.Disconnect(); err != nil {
+		return nil
+	}
+
+	disconnected = true
+	waitInternal := 250 * time.Millisecond
+	for i := 0; i < 5; i++ {
+		running, err := v.isRunning()
+		if err != nil {
+			return err
+		}
+		if !running {
+			break
+		}
+		time.Sleep(waitInternal)
+		waitInternal = waitInternal * 2
 	}
 
 	return nil
@@ -434,7 +675,11 @@ func (v *MachineVM) Remove(name string, opts machine.RemoveOptions) (string, fun
 	)
 
 	// cannot remove a running vm
-	if v.isRunning() {
+	running, err := v.isRunning()
+	if err != nil {
+		return "", nil, err
+	}
+	if running && !opts.Force {
 		return "", nil, errors.Errorf("running vm %q cannot be destroyed", v.Name)
 	}
 
@@ -448,6 +693,11 @@ func (v *MachineVM) Remove(name string, opts machine.RemoveOptions) (string, fun
 	if !opts.SaveImage {
 		files = append(files, v.ImagePath)
 	}
+	socketPath, err := v.getForwardSocketPath()
+	if err != nil {
+		logrus.Error(err)
+	}
+	files = append(files, socketPath)
 	files = append(files, v.archRemovalFiles()...)
 
 	if err := machine.RemoveConnection(v.Name); err != nil {
@@ -493,22 +743,53 @@ func (v *MachineVM) Remove(name string, opts machine.RemoveOptions) (string, fun
 	}, nil
 }
 
-func (v *MachineVM) isRunning() bool {
+func (v *MachineVM) isRunning() (bool, error) {
 	// Check if qmp socket path exists
 	if _, err := os.Stat(v.QMPMonitor.Address); os.IsNotExist(err) {
-		return false
+		return false, nil
 	}
 	// Check if we can dial it
-	if _, err := qmp.NewSocketMonitor(v.QMPMonitor.Network, v.QMPMonitor.Address, v.QMPMonitor.Timeout); err != nil {
+	monitor, err := qmp.NewSocketMonitor(v.QMPMonitor.Network, v.QMPMonitor.Address, v.QMPMonitor.Timeout)
+	if err != nil {
+		return false, nil
+	}
+	if err := monitor.Connect(); err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := monitor.Disconnect(); err != nil {
+			logrus.Error(err)
+		}
+	}()
+	// If there is a monitor, lets see if we can query state
+	state, err := v.checkStatus(monitor)
+	if err != nil {
+		return false, err
+	}
+	if state == machine.Running {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (v *MachineVM) isListening() bool {
+	// Check if we can dial it
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", "localhost", v.Port), 10*time.Millisecond)
+	if err != nil {
 		return false
 	}
+	conn.Close()
 	return true
 }
 
 // SSH opens an interactive SSH session to the vm specified.
 // Added ssh function to VM interface: pkg/machine/config/go : line 58
 func (v *MachineVM) SSH(name string, opts machine.SSHOptions) error {
-	if !v.isRunning() {
+	running, err := v.isRunning()
+	if err != nil {
+		return err
+	}
+	if !running {
 		return errors.Errorf("vm %q is not running.", v.Name)
 	}
 
@@ -540,7 +821,16 @@ func (v *MachineVM) SSH(name string, opts machine.SSHOptions) error {
 // executes qemu-image info to get the virtual disk size
 // of the diskimage
 func getDiskSize(path string) (uint64, error) {
-	diskInfo := exec.Command("qemu-img", "info", "--output", "json", path)
+	// Find the qemu executable
+	cfg, err := config.Default()
+	if err != nil {
+		return 0, err
+	}
+	qemuPathDir, err := cfg.FindHelperBinary("qemu-img", true)
+	if err != nil {
+		return 0, err
+	}
+	diskInfo := exec.Command(qemuPathDir, "info", "--output", "json", path)
 	stdout, err := diskInfo.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -569,7 +859,7 @@ func getDiskSize(path string) (uint64, error) {
 }
 
 // List lists all vm's that use qemu virtualization
-func List(_ machine.ListOptions) ([]*machine.ListResponse, error) {
+func (p *Provider) List(_ machine.ListOptions) ([]*machine.ListResponse, error) {
 	return GetVMInfos()
 }
 
@@ -599,8 +889,11 @@ func GetVMInfos() ([]*machine.ListResponse, error) {
 			listEntry.Stream = vm.ImageStream
 			listEntry.VMType = "qemu"
 			listEntry.CPUs = vm.CPUs
-			listEntry.Memory = vm.Memory
-			listEntry.DiskSize = vm.DiskSize
+			listEntry.Memory = vm.Memory * units.MiB
+			listEntry.DiskSize = vm.DiskSize * units.GiB
+			listEntry.Port = vm.Port
+			listEntry.RemoteUsername = vm.RemoteUsername
+			listEntry.IdentityPath = vm.IdentityPath
 			fi, err := os.Stat(fullPath)
 			if err != nil {
 				return err
@@ -612,7 +905,11 @@ func GetVMInfos() ([]*machine.ListResponse, error) {
 				return err
 			}
 			listEntry.LastUp = fi.ModTime()
-			if vm.isRunning() {
+			running, err := vm.isRunning()
+			if err != nil {
+				return err
+			}
+			if running {
 				listEntry.Running = true
 			}
 
@@ -625,7 +922,7 @@ func GetVMInfos() ([]*machine.ListResponse, error) {
 	return listed, err
 }
 
-func IsValidVMName(name string) (bool, error) {
+func (p *Provider) IsValidVMName(name string) (bool, error) {
 	infos, err := GetVMInfos()
 	if err != nil {
 		return false, err
@@ -638,8 +935,9 @@ func IsValidVMName(name string) (bool, error) {
 	return false, nil
 }
 
-// CheckActiveVM checks if there is a VM already running
-func CheckActiveVM() (bool, string, error) {
+// CheckExclusiveActiveVM checks if there is a VM already running
+// that does not allow other VMs to be running
+func (p *Provider) CheckExclusiveActiveVM() (bool, string, error) {
 	vms, err := GetVMInfos()
 	if err != nil {
 		return false, "", errors.Wrap(err, "error checking VM active")
@@ -654,19 +952,19 @@ func CheckActiveVM() (bool, string, error) {
 
 // startHostNetworking runs a binary on the host system that allows users
 // to setup port forwarding to the podman virtual machine
-func (v *MachineVM) startHostNetworking() error {
+func (v *MachineVM) startHostNetworking() (string, apiForwardingState, error) {
 	cfg, err := config.Default()
 	if err != nil {
-		return err
+		return "", noForwarding, err
 	}
 	binary, err := cfg.FindHelperBinary(machine.ForwarderBinaryName, false)
 	if err != nil {
-		return err
+		return "", noForwarding, err
 	}
 
 	qemuSocket, pidFile, err := v.getSocketandPid()
 	if err != nil {
-		return err
+		return "", noForwarding, err
 	}
 	attr := new(os.ProcAttr)
 	// Pass on stdin, stdout, stderr
@@ -676,12 +974,82 @@ func (v *MachineVM) startHostNetworking() error {
 	cmd = append(cmd, []string{"-listen-qemu", fmt.Sprintf("unix://%s", qemuSocket), "-pid-file", pidFile}...)
 	// Add the ssh port
 	cmd = append(cmd, []string{"-ssh-port", fmt.Sprintf("%d", v.Port)}...)
+
+	cmd, forwardSock, state := v.setupAPIForwarding(cmd)
+
 	if logrus.GetLevel() == logrus.DebugLevel {
 		cmd = append(cmd, "--debug")
 		fmt.Println(cmd)
 	}
 	_, err = os.StartProcess(cmd[0], cmd, attr)
-	return err
+	return forwardSock, state, err
+}
+
+func (v *MachineVM) setupAPIForwarding(cmd []string) ([]string, string, apiForwardingState) {
+	socket, err := v.getForwardSocketPath()
+
+	if err != nil {
+		return cmd, "", noForwarding
+	}
+
+	destSock := fmt.Sprintf("/run/user/%d/podman/podman.sock", v.UID)
+	forwardUser := "core"
+
+	if v.Rootful {
+		destSock = "/run/podman/podman.sock"
+		forwardUser = "root"
+	}
+
+	cmd = append(cmd, []string{"-forward-sock", socket}...)
+	cmd = append(cmd, []string{"-forward-dest", destSock}...)
+	cmd = append(cmd, []string{"-forward-user", forwardUser}...)
+	cmd = append(cmd, []string{"-forward-identity", v.IdentityPath}...)
+	link := filepath.Join(filepath.Dir(filepath.Dir(socket)), "podman.sock")
+
+	// The linking pattern is /var/run/docker.sock -> user global sock (link) -> machine sock (socket)
+	// This allows the helper to only have to maintain one constant target to the user, which can be
+	// repositioned without updating docker.sock.
+	if !dockerClaimSupported() {
+		return cmd, socket, claimUnsupported
+	}
+
+	if !dockerClaimHelperInstalled() {
+		return cmd, socket, notInstalled
+	}
+
+	if !alreadyLinked(socket, link) {
+		if checkSockInUse(link) {
+			return cmd, socket, machineLocal
+		}
+
+		_ = os.Remove(link)
+		if err = os.Symlink(socket, link); err != nil {
+			logrus.Warnf("could not create user global API forwarding link: %s", err.Error())
+			return cmd, socket, machineLocal
+		}
+	}
+
+	if !alreadyLinked(link, dockerSock) {
+		if checkSockInUse(dockerSock) {
+			return cmd, socket, machineLocal
+		}
+
+		if !claimDockerSock() {
+			logrus.Warn("podman helper is installed, but was not able to claim the global docker sock")
+			return cmd, socket, machineLocal
+		}
+	}
+
+	return cmd, dockerSock, dockerGlobal
+}
+
+func (v *MachineVM) getForwardSocketPath() (string, error) {
+	path, err := machine.GetDataDir(v.Name)
+	if err != nil {
+		logrus.Errorf("Error resolving data dir: %s", err.Error())
+		return "", nil
+	}
+	return filepath.Join(path, "podman.sock"), nil
 }
 
 func (v *MachineVM) getSocketandPid() (string, string, error) {
@@ -696,4 +1064,104 @@ func (v *MachineVM) getSocketandPid() (string, string, error) {
 	pidFile := filepath.Join(socketDir, fmt.Sprintf("%s.pid", v.Name))
 	qemuSocket := filepath.Join(socketDir, fmt.Sprintf("qemu_%s.sock", v.Name))
 	return qemuSocket, pidFile, nil
+}
+
+func checkSockInUse(sock string) bool {
+	if info, err := os.Stat(sock); err == nil && info.Mode()&fs.ModeSocket == fs.ModeSocket {
+		_, err = net.DialTimeout("unix", dockerSock, dockerConnectTimeout)
+		return err == nil
+	}
+
+	return false
+}
+
+func alreadyLinked(target string, link string) bool {
+	read, err := os.Readlink(link)
+	return err == nil && read == target
+}
+
+func waitAndPingAPI(sock string) {
+	client := http.Client{
+		Transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				con, err := net.DialTimeout("unix", sock, apiUpTimeout)
+				if err == nil {
+					con.SetDeadline(time.Now().Add(apiUpTimeout))
+				}
+				return con, err
+			},
+		},
+	}
+
+	resp, err := client.Get("http://host/_ping")
+	if err == nil {
+		defer resp.Body.Close()
+	}
+	if err != nil || resp.StatusCode != 200 {
+		logrus.Warn("API socket failed ping test")
+	}
+}
+
+func waitAPIAndPrintInfo(forwardState apiForwardingState, forwardSock string, rootFul bool, name string) {
+	if forwardState != noForwarding {
+		suffix := ""
+		if name != machine.DefaultMachineName {
+			suffix = " " + name
+		}
+		waitAndPingAPI(forwardSock)
+		if !rootFul {
+			fmt.Printf("\nThis machine is currently configured in rootless mode. If your containers\n")
+			fmt.Printf("require root permissions (e.g. ports < 1024), or if you run into compatibility\n")
+			fmt.Printf("issues with non-podman clients, you can switch using the following command: \n")
+			fmt.Printf("\n\tpodman machine set --rootful%s\n\n", suffix)
+		}
+
+		fmt.Printf("API forwarding listening on: %s\n", forwardSock)
+		if forwardState == dockerGlobal {
+			fmt.Printf("Docker API clients default to this address. You do not need to set DOCKER_HOST.\n\n")
+		} else {
+			stillString := "still "
+			switch forwardState {
+			case notInstalled:
+				fmt.Printf("\nThe system helper service is not installed; the default Docker API socket\n")
+				fmt.Printf("address can't be used by podman. ")
+				if helper := findClaimHelper(); len(helper) > 0 {
+					fmt.Printf("If you would like to install it run the\nfollowing commands:\n")
+					fmt.Printf("\n\tsudo %s install\n", helper)
+					fmt.Printf("\tpodman machine stop%s; podman machine start%s\n\n", suffix, suffix)
+				}
+			case machineLocal:
+				fmt.Printf("\nAnother process was listening on the default Docker API socket address.\n")
+			case claimUnsupported:
+				fallthrough
+			default:
+				stillString = ""
+			}
+
+			fmt.Printf("You can %sconnect Docker API clients by setting DOCKER_HOST using the\n", stillString)
+			fmt.Printf("following command in your terminal session:\n")
+			fmt.Printf("\n\texport DOCKER_HOST='unix://%s'\n\n", forwardSock)
+		}
+	}
+}
+
+func (v *MachineVM) writeConfig() error {
+	// GetConfDir creates the directory so no need to check for
+	// its existence
+	vmConfigDir, err := machine.GetConfDir(vmtype)
+	if err != nil {
+		return err
+	}
+
+	jsonFile := filepath.Join(vmConfigDir, v.Name) + ".json"
+	// Write the JSON file
+	b, err := json.MarshalIndent(v, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile(jsonFile, b, 0644); err != nil {
+		return err
+	}
+
+	return nil
 }

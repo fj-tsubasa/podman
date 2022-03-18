@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/config"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/lock"
-	"github.com/containers/podman/v3/libpod/network/types"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/lock"
 	"github.com/containers/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1299,21 +1299,9 @@ func TestAddContainerEmptyNetworkNameErrors(t *testing.T) {
 		testCtr, err := getTestCtr1(manager)
 		assert.NoError(t, err)
 
-		testCtr.config.Networks = []string{""}
-
-		err = state.AddContainer(testCtr)
-		assert.Error(t, err)
-	})
-}
-
-func TestAddContainerNetworkAliasesButNoMatchingNetwork(t *testing.T) {
-	runForAllStates(t, func(t *testing.T, state State, manager lock.Manager) {
-		testCtr, err := getTestCtr1(manager)
-		assert.NoError(t, err)
-
-		testCtr.config.Networks = []string{"test1"}
-		testCtr.config.NetworkAliases = make(map[string][]string)
-		testCtr.config.NetworkAliases["test2"] = []string{"alias1"}
+		testCtr.config.Networks = map[string]types.PerNetworkOptions{
+			"": {},
+		}
 
 		err = state.AddContainer(testCtr)
 		assert.Error(t, err)

@@ -4,7 +4,7 @@ package containers
 import (
 	"net/url"
 
-	"github.com/containers/podman/v3/pkg/bindings/internal/util"
+	"github.com/containers/podman/v4/pkg/bindings/internal/util"
 )
 
 // Changed returns true if named field has been set
@@ -90,6 +90,21 @@ func (o *RestoreOptions) GetImportAchive() string {
 		return z
 	}
 	return *o.ImportAchive
+}
+
+// WithImportArchive set field ImportArchive to given value
+func (o *RestoreOptions) WithImportArchive(value string) *RestoreOptions {
+	o.ImportArchive = &value
+	return o
+}
+
+// GetImportArchive returns value of field ImportArchive
+func (o *RestoreOptions) GetImportArchive() string {
+	if o.ImportArchive == nil {
+		var z string
+		return z
+	}
+	return *o.ImportArchive
 }
 
 // WithKeep set field Keep to given value

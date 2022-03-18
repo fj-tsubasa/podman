@@ -4,10 +4,10 @@ import (
 	"net"
 	"time"
 
+	"github.com/containers/common/libnetwork/types"
 	"github.com/containers/common/pkg/secrets"
 	"github.com/containers/image/v5/manifest"
-	"github.com/containers/podman/v3/libpod/network/types"
-	"github.com/containers/podman/v3/pkg/namespaces"
+	"github.com/containers/podman/v4/pkg/namespaces"
 	"github.com/containers/storage"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -163,6 +163,12 @@ type ContainerRootFSConfig struct {
 	// Volatile specifies whether the container storage can be optimized
 	// at the cost of not syncing all the dirty files in memory.
 	Volatile bool `json:"volatile,omitempty"`
+	// Passwd allows to user to override podman's passwd/group file setup
+	Passwd *bool `json:"passwd,omitempty"`
+	// ChrootDirs is an additional set of directories that need to be
+	// treated as root directories. Standard bind mounts will be mounted
+	// into paths relative to these directories.
+	ChrootDirs []string `json:"chroot_directories,omitempty"`
 }
 
 // ContainerSecurityConfig is an embedded sub-config providing security configuration
@@ -196,6 +202,8 @@ type ContainerSecurityConfig struct {
 	// Groups are additional groups to add the container's user to. These
 	// are resolved within the container using the container's /etc/passwd.
 	Groups []string `json:"groups,omitempty"`
+	// HostUsers are a list of host user accounts to add to /etc/passwd
+	HostUsers []string `json:"HostUsers,omitempty"`
 	// AddCurrentUserPasswdEntry indicates that Libpod should ensure that
 	// the container's /etc/passwd contains an entry for the user running
 	// Libpod - mostly used in rootless containers where the user running
@@ -229,10 +237,12 @@ type ContainerNetworkConfig struct {
 	// StaticIP is a static IP to request for the container.
 	// This cannot be set unless CreateNetNS is set.
 	// If not set, the container will be dynamically assigned an IP by CNI.
+	// Deprecated: Do no use this anymore, this is only for DB backwards compat.
 	StaticIP net.IP `json:"staticIP"`
 	// StaticMAC is a static MAC to request for the container.
 	// This cannot be set unless CreateNetNS is set.
 	// If not set, the container will be dynamically assigned a MAC by CNI.
+	// Deprecated: Do no use this anymore, this is only for DB backwards compat.
 	StaticMAC types.HardwareAddr `json:"staticMAC"`
 	// PortMappings are the ports forwarded to the container's network
 	// namespace
@@ -269,24 +279,24 @@ type ContainerNetworkConfig struct {
 	// Hosts to add in container
 	// Will be appended to host's host file
 	HostAdd []string `json:"hostsAdd,omitempty"`
-	// Network names (CNI) to add container to. Empty to use default network.
+	// Network names with the network specific options.
+	// Please note that these can be altered at runtime. The actual list is
+	// stored in the DB and should be retrieved from there via c.networks()
+	// this value is only used for container create.
+	// Added in podman 4.0, previously NetworksDeprecated was used. Make
+	// sure to not change the json tags.
+	Networks map[string]types.PerNetworkOptions `json:"newNetworks,omitempty"`
+	// Network names to add container to. Empty to use default network.
 	// Please note that these can be altered at runtime. The actual list is
 	// stored in the DB and should be retrieved from there; this is only the
 	// set of networks the container was *created* with.
-	Networks []string `json:"networks,omitempty"`
+	// Deprecated: Do no use this anymore, this is only for DB backwards compat.
+	// Also note that we need to keep the old json tag to decode from DB correctly
+	NetworksDeprecated []string `json:"networks,omitempty"`
 	// Network mode specified for the default network.
 	NetMode namespaces.NetworkMode `json:"networkMode,omitempty"`
 	// NetworkOptions are additional options for each network
 	NetworkOptions map[string][]string `json:"network_options,omitempty"`
-	// NetworkAliases are aliases that will be added to each network.
-	// These are additional names that this container can be accessed as via
-	// DNS when the CNI dnsname plugin is in use.
-	// Please note that these can be altered at runtime. As such, the actual
-	// list is stored in the database and should be retrieved from there;
-	// this is only the set of aliases the container was *created with*.
-	// Formatted as map of network name to aliases. All network names must
-	// be present in the Networks list above.
-	NetworkAliases map[string][]string `json:"network_alises,omitempty"`
 }
 
 // ContainerImageConfig is an embedded sub-config providing image configuration
@@ -328,7 +338,7 @@ type ContainerMiscConfig struct {
 	// CgroupManager is the cgroup manager used to create this container.
 	// If empty, the runtime default will be used.
 	CgroupManager string `json:"cgroupManager,omitempty"`
-	// NoCgroups indicates that the container will not create CGroups. It is
+	// NoCgroups indicates that the container will not create Cgroups. It is
 	// incompatible with CgroupParent.  Deprecated in favor of CgroupsMode.
 	NoCgroups bool `json:"noCgroups,omitempty"`
 	// CgroupsMode indicates how the container will create cgroups
@@ -369,8 +379,8 @@ type ContainerMiscConfig struct {
 	IsInfra bool `json:"pause"`
 	// SdNotifyMode tells libpod what to do with a NOTIFY_SOCKET if passed
 	SdNotifyMode string `json:"sdnotifyMode,omitempty"`
-	// Systemd tells libpod to setup the container in systemd mode
-	Systemd bool `json:"systemd"`
+	// Systemd tells libpod to setup the container in systemd mode, a value of nil denotes false
+	Systemd *bool `json:"systemd,omitempty"`
 	// HealthCheckConfig has the health check command and related timings
 	HealthCheckConfig *manifest.Schema2HealthConfig `json:"healthcheck"`
 	// PreserveFDs is a number of additional file descriptors (in addition
@@ -393,4 +403,15 @@ type ContainerMiscConfig struct {
 	// InitContainerType specifies if the container is an initcontainer
 	// and if so, what type: always or once are possible non-nil entries
 	InitContainerType string `json:"init_container_type,omitempty"`
+}
+
+type InfraInherit struct {
+	InfraSecurity     ContainerSecurityConfig
+	InfraLabels       []string                  `json:"labelopts,omitempty"`
+	InfraVolumes      []*ContainerNamedVolume   `json:"namedVolumes,omitempty"`
+	InfraOverlay      []*ContainerOverlayVolume `json:"overlayVolumes,omitempty"`
+	InfraImageVolumes []*ContainerImageVolume   `json:"ctrImageVolumes,omitempty"`
+	InfraUserVolumes  []string                  `json:"userVolumes,omitempty"`
+	InfraResources    *spec.LinuxResources      `json:"resources,omitempty"`
+	InfraDevices      []spec.LinuxDevice        `json:"device_host_src,omitempty"`
 }

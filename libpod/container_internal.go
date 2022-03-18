@@ -19,15 +19,15 @@ import (
 	butil "github.com/containers/buildah/util"
 	"github.com/containers/common/pkg/cgroups"
 	"github.com/containers/common/pkg/chown"
-	"github.com/containers/podman/v3/libpod/define"
-	"github.com/containers/podman/v3/libpod/events"
-	"github.com/containers/podman/v3/pkg/ctime"
-	"github.com/containers/podman/v3/pkg/hooks"
-	"github.com/containers/podman/v3/pkg/hooks/exec"
-	"github.com/containers/podman/v3/pkg/lookup"
-	"github.com/containers/podman/v3/pkg/rootless"
-	"github.com/containers/podman/v3/pkg/selinux"
-	"github.com/containers/podman/v3/pkg/util"
+	"github.com/containers/podman/v4/libpod/define"
+	"github.com/containers/podman/v4/libpod/events"
+	"github.com/containers/podman/v4/pkg/ctime"
+	"github.com/containers/podman/v4/pkg/hooks"
+	"github.com/containers/podman/v4/pkg/hooks/exec"
+	"github.com/containers/podman/v4/pkg/lookup"
+	"github.com/containers/podman/v4/pkg/rootless"
+	"github.com/containers/podman/v4/pkg/selinux"
+	"github.com/containers/podman/v4/pkg/util"
 	"github.com/containers/storage"
 	"github.com/containers/storage/pkg/archive"
 	"github.com/containers/storage/pkg/idtools"
@@ -447,17 +447,8 @@ func (c *Container) setupStorage(ctx context.Context) error {
 		LabelOpts: c.config.LabelOpts,
 	}
 
-	nopts := len(c.config.StorageOpts)
-	if nopts > 0 {
-		options.StorageOpt = make(map[string]string, nopts)
-		for _, opt := range c.config.StorageOpts {
-			split2 := strings.SplitN(opt, "=", 2)
-			if len(split2) > 2 {
-				return errors.Wrapf(define.ErrInvalidArg, "invalid storage options %q for %s", opt, c.ID())
-			}
-			options.StorageOpt[split2[0]] = split2[1]
-		}
-	}
+	options.StorageOpt = c.config.StorageOpts
+
 	if c.restoreFromCheckpoint && c.config.ProcessLabel != "" && c.config.MountLabel != "" {
 		// If restoring from a checkpoint, the root file-system needs
 		// to be mounted with the same SELinux labels as it was mounted
@@ -566,7 +557,7 @@ func (c *Container) setupStorage(ctx context.Context) error {
 }
 
 func (c *Container) processLabel(processLabel string) (string, error) {
-	if !c.config.Systemd && !c.ociRuntime.SupportsKVM() {
+	if !c.Systemd() && !c.ociRuntime.SupportsKVM() {
 		return processLabel, nil
 	}
 	ctrSpec, err := c.specFromState()
@@ -578,7 +569,7 @@ func (c *Container) processLabel(processLabel string) (string, error) {
 		switch {
 		case c.ociRuntime.SupportsKVM():
 			return selinux.KVMLabel(processLabel)
-		case c.config.Systemd:
+		case c.Systemd():
 			return selinux.InitLabel(processLabel)
 		}
 	}
@@ -634,6 +625,12 @@ func resetState(state *ContainerState) {
 	state.RestartPolicyMatch = false
 	state.RestartCount = 0
 	state.Checkpointed = false
+	state.Restored = false
+	state.CheckpointedTime = time.Time{}
+	state.RestoredTime = time.Time{}
+	state.CheckpointPath = ""
+	state.CheckpointLog = ""
+	state.RestoreLog = ""
 }
 
 // Refresh refreshes the container's state after a restart.
@@ -756,7 +753,7 @@ func (c *Container) export(path string) error {
 	if !c.state.Mounted {
 		containerMount, err := c.runtime.store.Mount(c.ID(), c.config.MountLabel)
 		if err != nil {
-			return errors.Wrapf(err, "error mounting container %q", c.ID())
+			return errors.Wrapf(err, "mounting container %q", c.ID())
 		}
 		mountPoint = containerMount
 		defer func() {
@@ -1095,7 +1092,7 @@ func (c *Container) init(ctx context.Context, retainRetries bool) error {
 		// upstream in any OCI runtime.
 		// TODO: Remove once runc supports cgroupsv2
 		if strings.Contains(err.Error(), "this version of runc doesn't work on cgroups v2") {
-			logrus.Errorf("Oci runtime %q does not support CGroups V2: use system migrate to mitigate", c.ociRuntime.Name())
+			logrus.Errorf("Oci runtime %q does not support Cgroups V2: use system migrate to mitigate", c.ociRuntime.Name())
 		}
 		return err
 	}
@@ -1111,6 +1108,12 @@ func (c *Container) init(ctx context.Context, retainRetries bool) error {
 	}
 
 	c.state.Checkpointed = false
+	c.state.Restored = false
+	c.state.CheckpointedTime = time.Time{}
+	c.state.RestoredTime = time.Time{}
+	c.state.CheckpointPath = ""
+	c.state.CheckpointLog = ""
+	c.state.RestoreLog = ""
 	c.state.ExitCode = 0
 	c.state.Exited = false
 	c.state.State = define.ContainerStateCreated
@@ -1288,8 +1291,8 @@ func (c *Container) stop(timeout uint) error {
 	// a pid namespace then the OCI Runtime needs to kill ALL processes in
 	// the containers cgroup in order to make sure the container is stopped.
 	all := !c.hasNamespace(spec.PIDNamespace)
-	// We can't use --all if CGroups aren't present.
-	// Rootless containers with CGroups v1 and NoCgroups are both cases
+	// We can't use --all if Cgroups aren't present.
+	// Rootless containers with Cgroups v1 and NoCgroups are both cases
 	// where this can happen.
 	if all {
 		if c.config.NoCgroups {
@@ -1397,7 +1400,7 @@ func (c *Container) stop(timeout uint) error {
 // Internal, non-locking function to pause a container
 func (c *Container) pause() error {
 	if c.config.NoCgroups {
-		return errors.Wrapf(define.ErrNoCgroups, "cannot pause without using CGroups")
+		return errors.Wrapf(define.ErrNoCgroups, "cannot pause without using Cgroups")
 	}
 
 	if rootless.IsRootless() {
@@ -1425,7 +1428,7 @@ func (c *Container) pause() error {
 // Internal, non-locking function to unpause a container
 func (c *Container) unpause() error {
 	if c.config.NoCgroups {
-		return errors.Wrapf(define.ErrNoCgroups, "cannot unpause without using CGroups")
+		return errors.Wrapf(define.ErrNoCgroups, "cannot unpause without using Cgroups")
 	}
 
 	if err := c.ociRuntime.UnpauseContainer(c); err != nil {
@@ -1688,13 +1691,6 @@ func (c *Container) mountNamedVolume(v *ContainerNamedVolume, mountpoint string)
 	if vol.state.NeedsCopyUp {
 		logrus.Debugf("Copying up contents from container %s to volume %s", c.ID(), vol.Name())
 
-		// Set NeedsCopyUp to false immediately, so we don't try this
-		// again when there are already files copied.
-		vol.state.NeedsCopyUp = false
-		if err := vol.save(); err != nil {
-			return nil, err
-		}
-
 		// If the volume is not empty, we should not copy up.
 		volMount := vol.mountPoint()
 		contents, err := ioutil.ReadDir(volMount)
@@ -1739,6 +1735,13 @@ func (c *Container) mountNamedVolume(v *ContainerNamedVolume, mountpoint string)
 		}
 		if len(srcContents) == 0 {
 			return vol, nil
+		}
+
+		// Set NeedsCopyUp to false since we are about to do first copy
+		// Do not copy second time.
+		vol.state.NeedsCopyUp = false
+		if err := vol.save(); err != nil {
+			return nil, err
 		}
 
 		// Buildah Copier accepts a reader, so we'll need a pipe.
@@ -1877,7 +1880,7 @@ func (c *Container) cleanupStorage() error {
 	return cleanupErr
 }
 
-// Unmount the a container and free its resources
+// Unmount the container and free its resources
 func (c *Container) cleanup(ctx context.Context) error {
 	var lastError error
 
@@ -1885,7 +1888,7 @@ func (c *Container) cleanup(ctx context.Context) error {
 
 	// Remove healthcheck unit/timer file if it execs
 	if c.config.HealthCheckConfig != nil {
-		if err := c.removeTimer(); err != nil {
+		if err := c.removeTransientFiles(ctx); err != nil {
 			logrus.Errorf("Removing timer for container %s healthcheck: %v", c.ID(), err)
 		}
 	}
@@ -2206,6 +2209,24 @@ func (c *Container) canWithPrevious() error {
 // prepareCheckpointExport writes the config and spec to
 // JSON files for later export
 func (c *Container) prepareCheckpointExport() error {
+	networks, err := c.networks()
+	if err != nil {
+		return err
+	}
+	// make sure to exclude the short ID alias since the container gets a new ID on restore
+	for net, opts := range networks {
+		newAliases := make([]string, 0, len(opts.Aliases))
+		for _, alias := range opts.Aliases {
+			if alias != c.config.ID[:12] {
+				newAliases = append(newAliases, alias)
+			}
+		}
+		opts.Aliases = newAliases
+		networks[net] = opts
+	}
+
+	// add the networks from the db to the config so that the exported checkpoint still stores all current networks
+	c.config.Networks = networks
 	// save live config
 	if _, err := metadata.WriteJSONFile(c.config, c.bundlePath(), metadata.ConfigDumpFile); err != nil {
 		return err

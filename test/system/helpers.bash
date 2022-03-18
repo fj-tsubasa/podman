@@ -37,9 +37,6 @@ fi
 # while retaining the ability to include these if they so desire.
 
 # Some CI systems set this to runc, overriding the default crun.
-# Although it would be more elegant to override options in run_podman(),
-# we instead override $PODMAN itself because some tests (170-run-userns)
-# have to invoke $PODMAN directly.
 if [[ -n $OCI_RUNTIME ]]; then
     if [[ -z $CONTAINERS_CONF ]]; then
         # FIXME: BATS provides no mechanism for end-of-run cleanup[1]; how
@@ -56,14 +53,14 @@ fi
 # Setup helper: establish a test environment with exactly the images needed
 function basic_setup() {
     # Clean up all containers
-    run_podman rm -t 0 --all --force
+    run_podman rm -t 0 --all --force --ignore
 
     # ...including external (buildah) ones
     run_podman ps --all --external --format '{{.ID}} {{.Names}}'
     for line in "${lines[@]}"; do
         set $line
         echo "# setup(): removing stray external container $1 ($2)" >&3
-        run_podman rm $1
+        run_podman rm -f $1
     done
 
     # Clean up all images except those desired
@@ -109,8 +106,9 @@ function basic_setup() {
 # Basic teardown: remove all pods and containers
 function basic_teardown() {
     echo "# [teardown]" >&2
-    run_podman '?' pod rm -t 0 --all --force
-    run_podman '?'     rm -t 0 --all --force
+    run_podman '?' pod rm -t 0 --all --force --ignore
+    run_podman '?'     rm -t 0 --all --force --ignore
+    run_podman '?' network prune --force
 
     command rm -rf $PODMAN_TMPDIR
 }
@@ -318,6 +316,10 @@ function wait_for_port() {
 # BEGIN miscellaneous tools
 
 # Shortcuts for common needs:
+function is_ubuntu() {
+    grep -qiw ubuntu /etc/os-release
+}
+
 function is_rootless() {
     [ "$(id -u)" -ne 0 ]
 }
@@ -335,6 +337,15 @@ function is_cgroupsv1() {
 function is_cgroupsv2() {
     cgroup_type=$(stat -f -c %T /sys/fs/cgroup)
     test "$cgroup_type" = "cgroup2fs"
+}
+
+# True if podman is using netavark
+function is_netavark() {
+    run_podman info --format '{{.Host.NetworkBackend}}'
+    if [[ "$output" =~ netavark ]]; then
+        return 0
+    fi
+    return 1
 }
 
 # Returns the OCI runtime *basename* (typically crun or runc). Much as we'd
@@ -372,6 +383,15 @@ function journald_unavailable() {
     return 1
 }
 
+# Returns the name of the local pause image.
+function pause_image() {
+    # This function is intended to be used as '$(pause_image)', i.e.
+    # our caller wants our output. run_podman() messes with output because
+    # it emits the command invocation to stdout, hence the redirection.
+    run_podman version --format "{{.Server.Version}}-{{.Server.Built}}" >/dev/null
+    echo "localhost/podman-pause:$output"
+}
+
 ###########################
 #  _add_label_if_missing  #  make sure skip messages include rootless/remote
 ###########################
@@ -395,6 +415,16 @@ function skip_if_rootless() {
     if is_rootless; then
         local msg=$(_add_label_if_missing "$1" "rootless")
         skip "${msg:-not applicable under rootless podman}"
+    fi
+}
+
+######################
+#  skip_if_not_rootless  #  ...with an optional message
+######################
+function skip_if_not_rootless() {
+    if ! is_rootless; then
+        local msg=$(_add_label_if_missing "$1" "rootfull")
+        skip "${msg:-not applicable under rootlfull podman}"
     fi
 }
 
@@ -446,6 +476,16 @@ function skip_if_rootless_cgroupsv1() {
 function skip_if_journald_unavailable {
     if journald_unavailable; then
         skip "Cannot use rootless journald on this system"
+    fi
+}
+
+function skip_if_root_ubuntu {
+    if is_ubuntu; then
+        if ! is_remote; then
+            if ! is_rootless; then
+                 skip "Cannot run this test on rootful ubuntu, usually due to user errors"
+            fi
+        fi
     fi
 }
 

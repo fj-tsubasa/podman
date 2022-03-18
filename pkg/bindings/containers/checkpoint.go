@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/containers/podman/v3/pkg/bindings"
-	"github.com/containers/podman/v3/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/pkg/domain/entities"
 )
 
 // Checkpoint checkpoints the given container (identified by nameOrID).  All additional
@@ -79,7 +79,14 @@ func Restore(ctx context.Context, nameOrID string, options *RestoreOptions) (*en
 
 	// Open the to-be-imported archive if needed.
 	var r io.Reader
-	if i := options.GetImportAchive(); i != "" {
+	i := options.GetImportArchive()
+	if i == "" {
+		// backwards compat, ImportAchive is a typo but we still have to
+		// support this to avoid breaking users
+		// TODO: remove ImportAchive with 5.0
+		i = options.GetImportAchive()
+	}
+	if i != "" {
 		params.Set("import", "true")
 		r, err = os.Open(i)
 		if err != nil {
