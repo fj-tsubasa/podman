@@ -89,6 +89,7 @@ type BudResults struct {
 	SignaturePolicy     string
 	SignBy              string
 	Squash              bool
+	SkipUnusedStages    bool
 	Stdin               bool
 	Tag                 []string
 	BuildOutput         string
@@ -125,6 +126,8 @@ type FromAndBudResults struct {
 	Isolation      string
 	Memory         string
 	MemorySwap     string
+	Retry          int
+	RetryDelay     string
 	SecurityOpt    []string
 	ShmSize        string
 	Ulimit         []string
@@ -258,6 +261,7 @@ func GetBudFlags(flags *BudResults) pflag.FlagSet {
 	if err := fs.MarkHidden("signature-policy"); err != nil {
 		panic(fmt.Sprintf("error marking the signature-policy flag as hidden: %v", err))
 	}
+	fs.BoolVar(&flags.SkipUnusedStages, "skip-unused-stages", true, "skips stages in multi-stage builds which do not affect the final target")
 	fs.BoolVar(&flags.Squash, "squash", false, "squash newly built layers into a single new layer")
 	fs.StringArrayVar(&flags.SSH, "ssh", []string{}, "SSH agent socket or keys to expose to the build. (format: default|<id>[=<socket>|<key>[,<key>]])")
 	fs.BoolVar(&flags.Stdin, "stdin", false, "pass stdin into containers")
@@ -344,6 +348,8 @@ func GetFromAndBudFlags(flags *FromAndBudResults, usernsResults *UserNSResults, 
 	fs.StringVar(&flags.Isolation, "isolation", DefaultIsolation(), "`type` of process isolation to use. Use BUILDAH_ISOLATION environment variable to override.")
 	fs.StringVarP(&flags.Memory, "memory", "m", "", "memory limit (format: <number>[<unit>], where unit = b, k, m or g)")
 	fs.StringVar(&flags.MemorySwap, "memory-swap", "", "swap limit equal to memory plus swap: '-1' to enable unlimited swap")
+	fs.IntVar(&flags.Retry, "retry", MaxPullPushRetries, "number of times to retry in case of failure when performing push/pull")
+	fs.StringVar(&flags.RetryDelay, "retry-delay", PullPushRetryDelay.String(), "delay between retries in case of push/pull failures")
 	fs.String("arch", runtime.GOARCH, "set the ARCH of the image to the provided value instead of the architecture of the host")
 	fs.String("os", runtime.GOOS, "prefer `OS` instead of the running OS when pulling images")
 	fs.StringSlice("platform", []string{parse.DefaultPlatform()}, "set the OS/ARCH/VARIANT of the image to the provided value instead of the current operating system and architecture of the host (for example `linux/arm`)")
@@ -386,6 +392,8 @@ func GetFromAndBudFlagsCompletions() commonComp.FlagCompletions {
 	flagCompletion["memory-swap"] = commonComp.AutocompleteNone
 	flagCompletion["os"] = commonComp.AutocompleteNone
 	flagCompletion["platform"] = commonComp.AutocompleteNone
+	flagCompletion["retry"] = commonComp.AutocompleteNone
+	flagCompletion["retry-delay"] = commonComp.AutocompleteNone
 	flagCompletion["security-opt"] = commonComp.AutocompleteNone
 	flagCompletion["shm-size"] = commonComp.AutocompleteNone
 	flagCompletion["ulimit"] = commonComp.AutocompleteNone
@@ -454,7 +462,7 @@ func VerifyFlagsArgsOrder(args []string) error {
 	return nil
 }
 
-// aliasFlags is a function to handle backwards compatibility with old flags
+// AliasFlags is a function to handle backwards compatibility with old flags
 func AliasFlags(f *pflag.FlagSet, name string) pflag.NormalizedName {
 	switch name {
 	case "net":
