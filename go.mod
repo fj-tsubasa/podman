@@ -49,7 +49,7 @@ require (
 	github.com/opencontainers/runtime-tools v0.9.1-0.20221014010322-58c91d646d86
 	github.com/opencontainers/selinux v1.10.2
 	github.com/openshift/imagebuilder v1.2.4-0.20220711175835-4151e43600df
-	github.com/rootless-containers/rootlesskit v1.0.1
+	github.com/rootless-containers/rootlesskit v1.1.0
 	github.com/sirupsen/logrus v1.9.0
 	github.com/spf13/cobra v1.6.1
 	github.com/spf13/pflag v1.0.5
@@ -61,7 +61,7 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20220115184804-dd687eb2f2d4
 	go.etcd.io/bbolt v1.3.6
 	golang.org/x/sync v0.0.0-20220929204114-8fcdb60fdcc0
-	golang.org/x/sys v0.1.0
+	golang.org/x/sys v0.2.0
 	golang.org/x/term v0.1.0
 	golang.org/x/text v0.4.0
 	google.golang.org/protobuf v1.28.1
