@@ -10,7 +10,7 @@ require (
 	github.com/checkpoint-restore/go-criu/v5 v5.3.0
 	github.com/container-orchestrated-devices/container-device-interface v0.5.2
 	github.com/containernetworking/cni v1.1.2
-	github.com/containernetworking/plugins v1.1.1
+	github.com/containernetworking/plugins v1.2.0
 	github.com/containers/buildah v1.28.1-0.20221029151733-c2cf9fa47ab6
 	github.com/containers/common v0.50.2-0.20221027091852-54845c3325e3
 	github.com/containers/conmon v2.0.20+incompatible
@@ -18,7 +18,7 @@ require (
 	github.com/containers/ocicrypt v1.1.6
 	github.com/containers/psgo v1.8.0
 	github.com/containers/storage v1.43.1-0.20221027113344-232bf398bd68
-	github.com/coreos/go-systemd/v22 v22.4.0
+	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/coreos/stream-metadata-go v0.0.0-20210225230131-70edb9eb47b3
 	github.com/cyphar/filepath-securejoin v0.2.3
 	github.com/digitalocean/go-qemu v0.0.0-20210326154740-ac9e0b687001
@@ -41,7 +41,7 @@ require (
 	github.com/moby/term v0.0.0-20210619224110-3f7ff695adc6
 	github.com/nxadm/tail v1.4.8
 	github.com/onsi/ginkgo v1.16.5
-	github.com/onsi/gomega v1.23.0
+	github.com/onsi/gomega v1.24.2
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.0-rc2
 	github.com/opencontainers/runc v1.1.4
@@ -58,12 +58,12 @@ require (
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
 	github.com/ulikunitz/xz v0.5.10
 	github.com/vbauerster/mpb/v7 v7.5.3
-	github.com/vishvananda/netlink v1.1.1-0.20220115184804-dd687eb2f2d4
+	github.com/vishvananda/netlink v1.2.1-beta.2
 	go.etcd.io/bbolt v1.3.6
 	golang.org/x/sync v0.0.0-20220929204114-8fcdb60fdcc0
-	golang.org/x/sys v0.1.0
-	golang.org/x/term v0.1.0
-	golang.org/x/text v0.4.0
+	golang.org/x/sys v0.4.0
+	golang.org/x/term v0.3.0
+	golang.org/x/text v0.5.0
 	google.golang.org/protobuf v1.28.1
 	gopkg.in/inf.v0 v0.9.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -72,7 +72,7 @@ require (
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/Microsoft/go-winio v0.6.0 // indirect
-	github.com/Microsoft/hcsshim v0.9.4 // indirect
+	github.com/Microsoft/hcsshim v0.9.6 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
@@ -134,7 +134,7 @@ require (
 	go.opencensus.io v0.23.0 // indirect
 	golang.org/x/crypto v0.0.0-20220926161630-eccd6366d1be // indirect
 	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/net v0.1.0 // indirect
+	golang.org/x/net v0.4.0 // indirect
 	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/genproto v0.0.0-20220929141241-1ce7b20da813 // indirect
 	google.golang.org/grpc v1.49.0 // indirect
