@@ -8,7 +8,7 @@ require (
 	github.com/buger/goterm v1.0.4
 	github.com/checkpoint-restore/checkpointctl v0.0.0-20220321135231-33f4a66335f0
 	github.com/checkpoint-restore/go-criu/v5 v5.3.0
-	github.com/container-orchestrated-devices/container-device-interface v0.5.2
+	github.com/container-orchestrated-devices/container-device-interface v0.5.4
 	github.com/containernetworking/cni v1.1.2
 	github.com/containernetworking/plugins v1.1.1
 	github.com/containers/buildah v1.28.1-0.20221029151733-c2cf9fa47ab6
@@ -46,7 +46,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.0-rc2
 	github.com/opencontainers/runc v1.1.4
 	github.com/opencontainers/runtime-spec v1.0.3-0.20220825212826-86290f6a00fb
-	github.com/opencontainers/runtime-tools v0.9.1-0.20221014010322-58c91d646d86
+	github.com/opencontainers/runtime-tools v0.9.1-0.20221107090550-2e043c6bd626
 	github.com/opencontainers/selinux v1.10.2
 	github.com/openshift/imagebuilder v1.2.4-0.20220711175835-4151e43600df
 	github.com/rootless-containers/rootlesskit v1.0.1
