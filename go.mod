@@ -60,10 +60,10 @@ require (
 	github.com/vbauerster/mpb/v7 v7.5.3
 	github.com/vishvananda/netlink v1.1.1-0.20220115184804-dd687eb2f2d4
 	go.etcd.io/bbolt v1.3.6
-	golang.org/x/sync v0.0.0-20220929204114-8fcdb60fdcc0
-	golang.org/x/sys v0.1.0
-	golang.org/x/term v0.1.0
-	golang.org/x/text v0.4.0
+	golang.org/x/sync v0.1.0
+	golang.org/x/sys v0.5.0
+	golang.org/x/term v0.5.0
+	golang.org/x/text v0.8.0
 	google.golang.org/protobuf v1.28.1
 	gopkg.in/inf.v0 v0.9.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -133,9 +133,9 @@ require (
 	go.mozilla.org/pkcs7 v0.0.0-20210826202110-33d05740a352 // indirect
 	go.opencensus.io v0.23.0 // indirect
 	golang.org/x/crypto v0.0.0-20220926161630-eccd6366d1be // indirect
-	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/net v0.1.0 // indirect
-	golang.org/x/tools v0.1.12 // indirect
+	golang.org/x/mod v0.8.0 // indirect
+	golang.org/x/net v0.6.0 // indirect
+	golang.org/x/tools v0.6.0 // indirect
 	google.golang.org/genproto v0.0.0-20220929141241-1ce7b20da813 // indirect
 	google.golang.org/grpc v1.49.0 // indirect
 	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
