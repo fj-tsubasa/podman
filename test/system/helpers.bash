@@ -802,6 +802,19 @@ function skip_if_aarch64 {
     fi
 }
 
+####################################
+# skip_if_not_support_tmpfs_noswap #
+####################################
+function skip_if_not_support_tmpfs_noswap() {
+    mkdir -p $PODMAN_TMPDIR/tmpfs-noswap
+    mount -t tmpfs -o size=1M -o noswap tmpfs $PODMAN_TMPDIR/tmpfs-noswap
+    if [ ${status} -ne 0 ]; then
+        skip "Running kernel not support noswap flag on tmpfs"
+    else
+        umount $PODMAN_TMPDIR/tmpfs-noswap
+    fi
+}
+
 #########
 #  die  #  Abort with helpful message
 #########
